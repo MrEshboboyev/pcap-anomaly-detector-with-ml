@@ -1,23 +1,29 @@
 ﻿using PcapAnomalyDetector;
 using PcapAnomalyDetector.Exporters;
+using PcapAnomalyDetector.FeatureExtraction;
+using PcapAnomalyDetector.MachineLearning;
 
 PcapToCsvExporter.ConvertPcapToCsv("C://MrEshboboyev//PcapAnomalyDetector//test.pcapng", "network_traffic.csv");
 
-ModelTrainer.Train("network_traffic.csv", "model.zip");
+AdvancedAnomalyDetector detector = new();
+await detector.TrainMultipleModels("network_traffic.csv", "model.zip");
 
 Console.WriteLine("Enter path to .pcap file:");
 var path = Console.ReadLine();
 
-var packets = PacketFeatureExtractor.ExtractFromPcap(path);
+EnhancedPacketFeatureExtractor extractor = new();
+var packets = extractor.ExtractFromPcap(path);
 
 Console.WriteLine("Traditional Detection:");
 foreach (var p in packets)
 {
     if (TraditionalDetector.IsSuspicious(p))
-        Console.WriteLine($"[ALERT] {p.SourceIP} -> {p.DestinationIP} Protocol: {p.Protocol}, Size: {p.Length}");
+        Console.WriteLine($"[ALERT] {p.SourceIP} -> {p.DestinationIP} Protocol: {p.Protocol}, Size: {p.PayloadLength}");
 }
 
 Console.WriteLine("\nML Detection:");
+
+
 var ml = new MlAnomalyDetector("model.zip");
 foreach (var p in packets)
 {
