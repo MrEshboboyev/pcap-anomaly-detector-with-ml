@@ -1,7 +1,7 @@
 ﻿using PcapAnomalyDetector;
 using PcapAnomalyDetector.Exporters;
 
-PcapToCsvExporter.ConvertPcapToCsv("C://MrEshboboyev//PacketSniffer//test.pcapng", "network_traffic.csv");
+PcapToCsvExporter.ConvertPcapToCsv("C://MrEshboboyev//PcapAnomalyDetector//test.pcapng", "network_traffic.csv");
 
 ModelTrainer.Train("network_traffic.csv", "model.zip");
 

@@ -15,14 +15,6 @@ public class PacketData
     public bool Label { get; set; }
 }
 
-public class ModelOutput
-{
-    [ColumnName("PredictedLabel")]
-    public bool PredictedLabel { get; set; }
-
-    public float Score { get; set; }
-}
-
 public class ModelTrainer
 {
     public static void Train(string csvPath, string modelPath)
