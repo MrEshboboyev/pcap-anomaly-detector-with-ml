@@ -444,9 +444,11 @@ public class RuleBasedDetector
         return new AnomalyResult
         {
             //Id = Guid.NewGuid().ToString(),
-            AnomalyType = type,
+            //AnomalyType = type,
+            AnomalyType = AnomalyType.Unknown,
             Description = description,
-            Severity = severity,
+            //Severity = severity,
+            Severity = SeverityLevel.Medium,
             DetectedAt = DateTime.UtcNow,
             Metadata = metadata
             //PacketInfo = packet
