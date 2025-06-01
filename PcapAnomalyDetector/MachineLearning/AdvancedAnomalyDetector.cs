@@ -169,7 +169,44 @@ public class AdvancedAnomalyDetector : IDisposable
 
     private IEstimator<ITransformer> BuildBinaryClassificationPipeline()
     {
-        // Define numeric columns that need type conversion
+        var mlContext = new MLContext();
+
+        var textColumns = new[]
+        {
+            nameof(EnhancedNetworkPacketData.Protocol),
+            nameof(EnhancedNetworkPacketData.ApplicationProtocol),
+            nameof(EnhancedNetworkPacketData.HttpMethod),
+            nameof(EnhancedNetworkPacketData.HttpUserAgent),
+            nameof(EnhancedNetworkPacketData.HttpHost),
+            nameof(EnhancedNetworkPacketData.SourceCountry),
+            nameof(EnhancedNetworkPacketData.DestinationCountry),
+            nameof(EnhancedNetworkPacketData.DnsDomain),
+        };
+
+        var boolColumns = new[]
+        {
+            nameof(EnhancedNetworkPacketData.IsFragmented),
+            nameof(EnhancedNetworkPacketData.TcpSyn),
+            nameof(EnhancedNetworkPacketData.TcpAck),
+            nameof(EnhancedNetworkPacketData.TcpFin),
+            nameof(EnhancedNetworkPacketData.TcpRst),
+            nameof(EnhancedNetworkPacketData.TcpPsh),
+            nameof(EnhancedNetworkPacketData.TcpUrg),
+            nameof(EnhancedNetworkPacketData.IsNightTime),
+            nameof(EnhancedNetworkPacketData.IsWeekend),
+            nameof(EnhancedNetworkPacketData.IsCrossBorder),
+            nameof(EnhancedNetworkPacketData.IsDnsQuery),
+            nameof(EnhancedNetworkPacketData.IsDnsResponse),
+            nameof(EnhancedNetworkPacketData.IsHttpRequest),
+            nameof(EnhancedNetworkPacketData.IsHttpResponse),
+            nameof(EnhancedNetworkPacketData.IsBroadcast),
+            nameof(EnhancedNetworkPacketData.IsMulticast),
+            nameof(EnhancedNetworkPacketData.IsPrivateIP),
+            nameof(EnhancedNetworkPacketData.IsLoopback),
+            nameof(EnhancedNetworkPacketData.IsWellKnownPort),
+            nameof(EnhancedNetworkPacketData.IsPortScanIndicator)
+        };
+
         var numericColumns = new[]
         {
             nameof(EnhancedNetworkPacketData.SourcePort),
@@ -184,65 +221,45 @@ public class AdvancedAnomalyDetector : IDisposable
             nameof(EnhancedNetworkPacketData.PayloadLength),
             nameof(EnhancedNetworkPacketData.PayloadEntropy),
             nameof(EnhancedNetworkPacketData.UniqueCharacters),
-            nameof(EnhancedNetworkPacketData.AsciiRatio)
+            nameof(EnhancedNetworkPacketData.AsciiRatio),
+            nameof(EnhancedNetworkPacketData.HourOfDay),
+            nameof(EnhancedNetworkPacketData.DayOfWeek),
         };
 
-        // Build the pipeline step by step with explicit typing
-        IEstimator<ITransformer> pipeline = _mlContext.Transforms.Text.FeaturizeText(
-                outputColumnName: "ProtocolFeatures",
-                inputColumnName: nameof(EnhancedNetworkPacketData.Protocol))
-            .Append(_mlContext.Transforms.Text.FeaturizeText(
-                outputColumnName: "AppProtocolFeatures",
-                inputColumnName: nameof(EnhancedNetworkPacketData.ApplicationProtocol)))
-            .Append(_mlContext.Transforms.Text.FeaturizeText(
-                outputColumnName: "HttpMethodFeatures",
-                inputColumnName: nameof(EnhancedNetworkPacketData.HttpMethod)));
+        IEstimator<ITransformer> pipeline = mlContext.Transforms.CopyColumns("Label", nameof(EnhancedNetworkPacketData.Label));
 
-
-        // Add categorical encodings with null handling
-        pipeline = pipeline
-            .Append(_mlContext.Transforms.Categorical.OneHotEncoding(
-                outputColumnName: "HourFeatures",
-                inputColumnName: nameof(EnhancedNetworkPacketData.HourOfDay)))
-            .Append(_mlContext.Transforms.Categorical.OneHotEncoding(
-                outputColumnName: "DayFeatures",
-                inputColumnName: nameof(EnhancedNetworkPacketData.DayOfWeek)));
-
-        // Convert numeric columns to float with proper missing value handling
-        foreach (var column in numericColumns)
+        foreach (var col in boolColumns.Concat(numericColumns))
         {
+            var floatCol = $"{col}_float";
             pipeline = pipeline
-                .Append(_mlContext.Transforms.ReplaceMissingValues(
-                    outputColumnName: column,
-                    inputColumnName: column,
-                    replacementMode: MissingValueReplacingEstimator.ReplacementMode.Mean))
-                .Append(_mlContext.Transforms.Conversion.ConvertType(
-                    outputColumnName: column,
-                    inputColumnName: column,
-                    outputKind: DataKind.Single));
+                .Append(mlContext.Transforms.Conversion.ConvertType(floatCol, col, DataKind.Single))
+                .Append(mlContext.Transforms.ReplaceMissingValues(floatCol, floatCol, replacementMode: MissingValueReplacingEstimator.ReplacementMode.Mean));
         }
 
-        // Concatenate all features
-        var featureColumns = new List<string>
+        foreach (var col in textColumns)
         {
-            "ProtocolFeatures",
-            "AppProtocolFeatures",
-            "HttpMethodFeatures",
-            "HourFeatures",
-            "DayFeatures"
-        };
-            featureColumns.AddRange(numericColumns);
+            var featCol = $"{col}_feat";
+            pipeline = pipeline.Append(mlContext.Transforms.Text.ProduceHashedWordBags(
+                outputColumnName: featCol,
+                inputColumnName: col,
+                numberOfBits: 10));
+        }
+
+        var featureColumns = boolColumns.Select(c => c + "_float")
+            .Concat(numericColumns.Select(c => c + "_float"))
+            .Concat(textColumns.Select(c => c + "_feat"))
+            .ToArray();
 
         pipeline = pipeline
-            .Append(_mlContext.Transforms.Concatenate("Features", featureColumns.ToArray()))
-            .Append(_mlContext.Transforms.NormalizeMinMax("Features"))
-            .Append(_mlContext.BinaryClassification.Trainers.LightGbm(new LightGbmBinaryTrainer.Options
+            .Append(mlContext.Transforms.Concatenate("Features", featureColumns))
+            .Append(mlContext.Transforms.NormalizeMinMax("Features"))
+            .Append(mlContext.BinaryClassification.Trainers.LightGbm(new LightGbmBinaryTrainer.Options
             {
-                LabelColumnName = nameof(EnhancedNetworkPacketData.Label),
+                LabelColumnName = "Label",
+                FeatureColumnName = "Features",
                 NumberOfLeaves = 50,
                 MinimumExampleCountPerLeaf = 20,
-                LearningRate = 0.1f,
-                FeatureColumnName = "Features"
+                LearningRate = 0.1f
             }));
 
         return pipeline;
@@ -250,62 +267,56 @@ public class AdvancedAnomalyDetector : IDisposable
 
     private IEstimator<ITransformer> BuildOneClassSvmPipeline()
     {
-        return _mlContext.Transforms.Text.FeaturizeText(
-            outputColumnName: "ProtocolFeatures",
-            inputColumnName: nameof(EnhancedNetworkPacketData.Protocol))
+        var mlContext = new MLContext();
 
-        .Append(_mlContext.Transforms.ReplaceMissingValues(
-            outputColumnName: nameof(EnhancedNetworkPacketData.FlowBytesPerSecond),
-            inputColumnName: nameof(EnhancedNetworkPacketData.FlowBytesPerSecond),
-            replacementMode: MissingValueReplacingEstimator.ReplacementMode.Mean))
-        .Append(_mlContext.Transforms.Conversion.ConvertType(
-            outputColumnName: "FlowBytesPerSecondFloat",
-            inputColumnName: nameof(EnhancedNetworkPacketData.FlowBytesPerSecond),
-            outputKind: DataKind.Single))
+        // Matnli ustun: Protocol
+        var textColumn = nameof(EnhancedNetworkPacketData.Protocol);
+        var textFeatureCol = "Protocol_feat";
 
-        .Append(_mlContext.Transforms.ReplaceMissingValues(
-            outputColumnName: nameof(EnhancedNetworkPacketData.PacketLength),
-            inputColumnName: nameof(EnhancedNetworkPacketData.PacketLength),
-            replacementMode: MissingValueReplacingEstimator.ReplacementMode.Mean))
-        .Append(_mlContext.Transforms.Conversion.ConvertType(
-            outputColumnName: "PacketLengthFloat",
-            inputColumnName: nameof(EnhancedNetworkPacketData.PacketLength),
-            outputKind: DataKind.Single))
+        // Sonli ustunlar
+        var numericColumns = new[]
+        {
+        nameof(EnhancedNetworkPacketData.FlowBytesPerSecond),
+        nameof(EnhancedNetworkPacketData.PacketLength),
+        nameof(EnhancedNetworkPacketData.PayloadLength),
+        nameof(EnhancedNetworkPacketData.PayloadEntropy),
+    };
 
-        .Append(_mlContext.Transforms.ReplaceMissingValues(
-            outputColumnName: nameof(EnhancedNetworkPacketData.PayloadLength),
-            inputColumnName: nameof(EnhancedNetworkPacketData.PayloadLength),
-            replacementMode: MissingValueReplacingEstimator.ReplacementMode.Mean))
-        .Append(_mlContext.Transforms.Conversion.ConvertType(
-            outputColumnName: "PayloadLengthFloat",
-            inputColumnName: nameof(EnhancedNetworkPacketData.PayloadLength),
-            outputKind: DataKind.Single))
+        // Pipeline boshlanishi
+        IEstimator<ITransformer> pipeline = mlContext.Transforms.Text.FeaturizeText(
+            outputColumnName: textFeatureCol,
+            inputColumnName: textColumn);
 
-        .Append(_mlContext.Transforms.ReplaceMissingValues(
-            outputColumnName: nameof(EnhancedNetworkPacketData.PayloadEntropy),
-            inputColumnName: nameof(EnhancedNetworkPacketData.PayloadEntropy),
-            replacementMode: MissingValueReplacingEstimator.ReplacementMode.Mean))
-        .Append(_mlContext.Transforms.Conversion.ConvertType(
-            outputColumnName: "PayloadEntropyFloat",
-            inputColumnName: nameof(EnhancedNetworkPacketData.PayloadEntropy),
-            outputKind: DataKind.Single))
+        // Sonli ustunlarga ishlov berish
+        foreach (var col in numericColumns)
+        {
+            string floatCol = $"{col}_float";
+            pipeline = pipeline
+                .Append(mlContext.Transforms.ReplaceMissingValues(
+                    outputColumnName: col,
+                    inputColumnName: col,
+                    replacementMode: MissingValueReplacingEstimator.ReplacementMode.Mean))
+                .Append(mlContext.Transforms.Conversion.ConvertType(
+                    outputColumnName: floatCol,
+                    inputColumnName: col,
+                    outputKind: DataKind.Single));
+        }
 
-        .Append(_mlContext.Transforms.Concatenate("Features",
-            "ProtocolFeatures",
-            "PacketLengthFloat",
-            "PayloadLengthFloat",
-            "PayloadEntropyFloat",
-            "FlowBytesPerSecondFloat"))
+        // Featurelar birlashtirish
+        var floatColumns = numericColumns.Select(c => c + "_float").Append(textFeatureCol).ToArray();
 
-        .Append(_mlContext.Transforms.NormalizeMinMax("Features"))
-        .Append(_mlContext.AnomalyDetection.Trainers.RandomizedPca(
-            new RandomizedPcaTrainer.Options
-            {
-                FeatureColumnName = "Features",
-                Rank = 10,
-                Oversampling = 10
-            }));
+        pipeline = pipeline
+            .Append(mlContext.Transforms.Concatenate("Features", floatColumns))
+            .Append(mlContext.Transforms.NormalizeMinMax("Features"))
+            .Append(mlContext.AnomalyDetection.Trainers.RandomizedPca(
+                new RandomizedPcaTrainer.Options
+                {
+                    FeatureColumnName = "Features",
+                    Rank = 10,
+                    Oversampling = 10
+                }));
 
+        return pipeline;
     }
 
     #endregion
@@ -417,7 +428,15 @@ public class AdvancedAnomalyDetector : IDisposable
     {
         try
         {
-            var predictions = model.Transform(testSet);
+            // Label ustunini Single ga o'zgartirish (agar kerak bo'lsa)
+            var convertedTestSet = _mlContext.Transforms.Conversion.ConvertType(
+                    outputColumnName: "Label",
+                    inputColumnName: "Label",
+                    outputKind: DataKind.Single)
+                .Fit(testSet)
+                .Transform(testSet);
+
+            var predictions = model.Transform(convertedTestSet);
             var metrics = _mlContext.AnomalyDetection.Evaluate(predictions);
 
             result.ModelMetrics["OneClassSVM"] = new ModelMetrics
