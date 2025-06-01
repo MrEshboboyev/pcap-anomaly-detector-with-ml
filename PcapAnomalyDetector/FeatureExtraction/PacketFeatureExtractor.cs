@@ -62,6 +62,8 @@ public class EnhancedPacketFeatureExtractor
         return results;
     }
 
+    #region Extractors
+
     private EnhancedNetworkPacketData? ExtractFeatures(PacketCapture capture)
     {
         var rawPacket = capture.GetPacket();
@@ -164,6 +166,10 @@ public class EnhancedPacketFeatureExtractor
         }
     }
 
+    #endregion
+
+    #region Analysis Methods
+
     private void AnalyzeApplicationLayer(Packet packet, EnhancedNetworkPacketData packetData)
     {
         // DNS Analysis
@@ -237,6 +243,21 @@ public class EnhancedPacketFeatureExtractor
         }
     }
 
+    #endregion
+
+    #region Flow related Methods
+
+    private class FlowData
+    {
+        public DateTime StartTime { get; set; }
+        public DateTime LastPacketTime { get; set; }
+        public int PacketCount { get; set; }
+        public long TotalBytes { get; set; }
+        public double Duration { get; set; }
+        public double BytesPerSecond { get; set; }
+        public double PacketsPerSecond { get; set; }
+    }
+
     private string GetFlowKey(string srcIp, string dstIp, int srcPort, int dstPort, string protocol)
     {
         // Create bidirectional flow key
@@ -268,6 +289,10 @@ public class EnhancedPacketFeatureExtractor
         packetData.FlowPacketsPerSecond = flowData.PacketsPerSecond;
     }
 
+    #endregion
+
+    #region Port Scan Detection
+
     private bool DetectPortScan(string sourceIp, int destinationPort)
     {
         var key = sourceIp;
@@ -280,6 +305,10 @@ public class EnhancedPacketFeatureExtractor
         _portScanTracker[key]++;
         return _portScanTracker[key] > 10; // Threshold for port scan detection
     }
+
+    #endregion
+
+    #region Calculation Methods
 
     private float CalculateEntropy(byte[] data)
     {
@@ -332,6 +361,10 @@ public class EnhancedPacketFeatureExtractor
         };
     }
 
+    #endregion
+
+    #region IP Classification Methods
+
     private bool IsPrivateIP(string ip)
     {
         if (!IPAddress.TryParse(ip, out var address)) return false;
@@ -348,6 +381,10 @@ public class EnhancedPacketFeatureExtractor
                                            addr.GetAddressBytes()[0] >= 224 &&
                                            addr.GetAddressBytes()[0] <= 239;
 
+    #endregion
+
+    #region Initialize Ports
+
     private HashSet<int> InitializeWellKnownPorts()
     {
         return new HashSet<int>
@@ -357,14 +394,5 @@ public class EnhancedPacketFeatureExtractor
         };
     }
 
-    private class FlowData
-    {
-        public DateTime StartTime { get; set; }
-        public DateTime LastPacketTime { get; set; }
-        public int PacketCount { get; set; }
-        public long TotalBytes { get; set; }
-        public double Duration { get; set; }
-        public double BytesPerSecond { get; set; }
-        public double PacketsPerSecond { get; set; }
-    }
+    #endregion
 }

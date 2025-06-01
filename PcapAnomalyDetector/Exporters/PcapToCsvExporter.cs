@@ -1,6 +1,8 @@
 ﻿using PacketDotNet;
+using PcapAnomalyDetector.Models;
 using SharpPcap;
 using System.Collections.Concurrent;
+using System.ComponentModel.DataAnnotations;
 using System.Globalization;
 using System.Net;
 using System.Text;
@@ -12,11 +14,17 @@ namespace PcapAnomalyDetector.Exporters;
 /// </summary>
 public static class PcapToCsvExporter
 {
+    #region Constants
+
     private const int BATCH_SIZE = 10000;
     private const double HIGH_BANDWIDTH_THRESHOLD = 1024 * 1024; // 1 MB/s
     private const double HIGH_ENTROPY_THRESHOLD = 7.5;
     private const int MAX_DNS_QUERY_LENGTH = 50;
     private const int PORT_SCAN_THRESHOLD = 5;
+
+    #endregion
+
+    #region Flow Tracker
 
     /// <summary>
     /// Tracks flow-level statistics for anomaly detection
@@ -38,6 +46,10 @@ public static class PcapToCsvExporter
         public double AveragePacketSize => PacketCount > 0 ? (double)TotalBytes / PacketCount : 0;
     }
 
+    #endregion
+
+    #region Convert Pcap to CSV
+
     /// <summary>
     /// Converts PCAP file to CSV with comprehensive network features and anomaly detection
     /// </summary>
@@ -55,6 +67,7 @@ public static class PcapToCsvExporter
     {
         if (!File.Exists(pcapPath))
             throw new FileNotFoundException($"PCAP file not found: {pcapPath}");
+        // correct
 
         var flowStats = new ConcurrentDictionary<string, FlowTracker>();
         var protocolStats = new ConcurrentDictionary<string, int>();
@@ -157,107 +170,125 @@ public static class PcapToCsvExporter
         ConvertPcapToCsvAsync(pcapPath, csvOutputPath, labelAnomalies).GetAwaiter().GetResult();
     }
 
-    private static string GenerateCsvHeader()
-    {
-        return string.Join(",", new[]
-        {
-            "Timestamp", "SourceIP", "DestinationIP", "SourcePort", "DestinationPort", "Protocol",
-            "PacketLength", "HeaderLength", "PayloadLength", "TTL", "IsFragmented", "FragmentOffset",
-            "TcpSyn", "TcpAck", "TcpFin", "TcpRst", "TcpPsh", "TcpUrg", "TcpWindowSize", "TcpSequenceNumber", "TcpAcknowledgmentNumber",
-            "InterPacketInterval", "FlowPacketCount", "FlowTotalBytes", "FlowDuration", "FlowBytesPerSecond", "FlowPacketsPerSecond",
-            "PayloadEntropy", "UniqueCharacters", "AsciiRatio", "IsNightTime", "IsWeekend", "HourOfDay", "DayOfWeek",
-            "IsDnsQuery", "IsDnsResponse", "DnsQuestionCount", "DnsAnswerCount", "DnsDomain",
-            "IsHttpRequest", "IsHttpResponse", "HttpMethod", "HttpStatusCode", "HttpUserAgent", "HttpHost",
-            "IsBroadcast", "IsMulticast", "IsPrivateIP", "IsLoopback", "IsWellKnownPort", "IsPortScanIndicator",
-            "Label", "AnomalyType", "AnomalySeverity", "AnomalyConfidence"
-        });
-    }
+    #endregion
+
+    #region Packet Processing
 
     private static string ProcessPacketAsync(
-    PacketCapture capture,
-    ConcurrentDictionary<string, FlowTracker> flowStats,
-    ConcurrentDictionary<string, int> protocolStats,
-    ConcurrentDictionary<string, int> dnsQueries,
-    ConcurrentDictionary<string, int> httpRequests,
-    ShannonEntropy entropyCalculator,
-    NetworkAnomalyDetector anomalyDetector,
-    DateTime? previousPacketTime,
-    List<IPAddress> localIPs,
-    bool labelAnomalies)
+        PacketCapture capture,
+        ConcurrentDictionary<string, FlowTracker> flowStats,
+        ConcurrentDictionary<string, int> protocolStats,
+        ConcurrentDictionary<string, int> dnsQueries,
+        ConcurrentDictionary<string, int> httpRequests,
+        ShannonEntropy entropyCalculator,
+        NetworkAnomalyDetector anomalyDetector,
+        DateTime? previousPacketTime,
+        List<IPAddress> localIPs,
+        bool labelAnomalies)
     {
         var rawPacket = capture.GetPacket();
         var packet = Packet.ParsePacket(rawPacket.LinkLayerType, rawPacket.Data);
         var ipPacket = packet.Extract<IPPacket>();
-
         if (ipPacket == null) return null;
 
         var tcpPacket = packet.Extract<TcpPacket>();
         var udpPacket = packet.Extract<UdpPacket>();
         var icmpPacket = packet.Extract<IcmpV4Packet>();
-
         var packetTime = capture.Header.Timeval.Date;
 
         var packetInfo = ExtractPacketInfo(capture, ipPacket, tcpPacket, udpPacket);
-
-        var flowKey = $"{packetInfo.SourceIP}:{packetInfo.SourcePort}-{packetInfo.DestinationIP}:{packetInfo.DestinationPort}-{packetInfo.Protocol}";
+        var flowKey = $"{packetInfo.SourceIP}:{packetInfo.SourcePort}-" +
+                      $"{packetInfo.DestinationIP}:{packetInfo.DestinationPort}-" +
+                      $"{packetInfo.Protocol}";
 
         var flowTracker = flowStats.GetOrAdd(flowKey, _ => new FlowTracker { FirstSeen = packetTime });
-
         UpdateFlowStats(flowTracker, packetInfo, packetTime);
 
         protocolStats.AddOrUpdate(packetInfo.Protocol, 1, (_, count) => count + 1);
 
         var appLayerInfo = ExtractApplicationLayerInfoAsync(tcpPacket, udpPacket, dnsQueries, httpRequests);
-
         var payloadData = GetPayloadData(packet);
         var payloadFeatures = CalculatePayloadFeatures(payloadData, entropyCalculator);
-
         var timingFeatures = CalculateTimingFeatures(packetTime, previousPacketTime);
 
         var anomalyInfo = labelAnomalies
             ? anomalyDetector.DetectAnomaliesAsync(packetInfo, flowTracker, appLayerInfo, payloadFeatures, localIPs)
             : new AnomalyInfo { IsAnomaly = false, Type = "Normal", Severity = "Low", Confidence = 0.0f };
 
-        return BuildCsvLine(packetInfo, flowTracker, appLayerInfo, payloadFeatures, timingFeatures, anomalyInfo, packetTime);
-    }
-
-    private static PacketInfo ExtractPacketInfo(PacketCapture capture, IPPacket ipPacket, TcpPacket? tcpPacket, UdpPacket? udpPacket)
-    {
-        return new PacketInfo
+        var modelData = new EnhancedNetworkPacketData
         {
-            Timestamp = capture.Header.Timeval.Date,
-            SourceIP = ipPacket.SourceAddress.ToString(),
-            DestinationIP = ipPacket.DestinationAddress.ToString(),
-            Protocol = ipPacket.Protocol.ToString(),
-            PacketLength = ipPacket.TotalLength,
-            HeaderLength = ipPacket.HeaderLength,
-            PayloadLength = ipPacket.PayloadPacket?.TotalPacketLength ?? 0,
-            TTL = ipPacket.TimeToLive,
-            //IsFragmented = ipPacket.FragmentFlags.HasFlag(IPPacket.IPFragmentFlags.MoreFragments) || ipPacket.FragmentOffset > 0,
-            //FragmentOffset = ipPacket.FragmentOffset,
-            SourcePort = tcpPacket?.SourcePort ?? udpPacket?.SourcePort ?? 0,
-            DestinationPort = tcpPacket?.DestinationPort ?? udpPacket?.DestinationPort ?? 0,
-            TcpFlags = ExtractTcpFlags(tcpPacket),
-            TcpWindowSize = tcpPacket?.WindowSize ?? 0,
-            TcpSequenceNumber = tcpPacket?.SequenceNumber ?? 0,
-            TcpAcknowledgmentNumber = tcpPacket?.AcknowledgmentNumber ?? 0
+            PacketLength = packetInfo.PacketLength,
+            HeaderLength = packetInfo.HeaderLength,
+            PayloadLength = packetInfo.PayloadLength,
+            Protocol = packetInfo.Protocol,
+            //ApplicationProtocol = appLayerInfo.ApplicationProtocol,
+            ApplicationProtocol = "TCP",
+            //ProtocolNumber = packetInfo.ProtocolNumber,
+            ProtocolNumber = 1, // TODO
+            SourceIP = packetInfo.SourceIP,
+            DestinationIP = packetInfo.DestinationIP,
+            SourcePort = packetInfo.SourcePort,
+            DestinationPort = packetInfo.DestinationPort,
+            TTL = packetInfo.TTL,
+            IsFragmented = packetInfo.IsFragmented,
+            FragmentOffset = packetInfo.FragmentOffset,
+            TcpSyn = packetInfo.TcpFlags.Syn,
+            TcpAck = packetInfo.TcpFlags.Ack,
+            TcpFin = packetInfo.TcpFlags.Fin,
+            TcpRst = packetInfo.TcpFlags.Rst,
+            TcpPsh = packetInfo.TcpFlags.Psh,
+            TcpUrg = packetInfo.TcpFlags.Urg,
+            TcpWindowSize = packetInfo.TcpWindowSize,
+            TcpSequenceNumber = packetInfo.TcpSequenceNumber,
+            TcpAcknowledgmentNumber = packetInfo.TcpAcknowledgmentNumber,
+            TimestampSeconds = packetTime.Subtract(DateTime.UnixEpoch).TotalSeconds,
+            InterPacketInterval = timingFeatures.InterPacketInterval,
+            FlowPacketCount = flowTracker.PacketCount,
+            FlowTotalBytes = flowTracker.TotalBytes,
+            FlowDuration = flowTracker.Duration,
+            FlowBytesPerSecond = flowTracker.BytesPerSecond,
+            FlowPacketsPerSecond = flowTracker.PacketsPerSecond,
+            //PayloadEntropy = payloadFeatures.Entropy,
+            PayloadEntropy = 1,
+            UniqueCharacters = payloadFeatures.UniqueCharacters,
+            //AsciiRatio = payloadFeatures.AsciiRatio,
+            AsciiRatio = 1,
+            IsNightTime = timingFeatures.IsNightTime,
+            IsWeekend = timingFeatures.IsWeekend,
+            HourOfDay = timingFeatures.HourOfDay,
+            DayOfWeek = timingFeatures.DayOfWeek,
+            //SourceCountry = packetInfo.SourceCountry,
+            //DestinationCountry = packetInfo.DestinationCountry,
+            //IsCrossBorder = packetInfo.IsCrossBorder,
+            SourceCountry = "USA", // TODO
+            DestinationCountry = "RUS", // TODO
+            IsCrossBorder = true, // TODO
+            IsDnsQuery = appLayerInfo.IsDnsQuery,
+            IsDnsResponse = appLayerInfo.IsDnsResponse,
+            DnsQuestionCount = appLayerInfo.DnsQuestionCount,
+            DnsAnswerCount = appLayerInfo.DnsAnswerCount,
+            DnsDomain = appLayerInfo.DnsDomain,
+            IsHttpRequest = appLayerInfo.IsHttpRequest,
+            IsHttpResponse = appLayerInfo.IsHttpResponse,
+            HttpMethod = appLayerInfo.HttpMethod,
+            HttpStatusCode = appLayerInfo.HttpStatusCode,
+            HttpUserAgent = appLayerInfo.HttpUserAgent,
+            HttpHost = appLayerInfo.HttpHost,
+            IsBroadcast = IsIPv4Broadcast(packetInfo.DestinationIP),
+            IsMulticast = IsIPv4Multicast(packetInfo.DestinationIP),
+            IsPrivateIP = IsPrivateIP(packetInfo.SourceIP),
+            IsLoopback = IsLoopbackIP(packetInfo.SourceIP),
+            IsWellKnownPort = IsWellKnownPort(packetInfo.DestinationPort),
+            IsPortScanIndicator = flowTracker.UniqueDestinationPorts.Count > PORT_SCAN_THRESHOLD,
+            Label = anomalyInfo.IsAnomaly
         };
+
+        return BuildCsvLine(modelData, anomalyInfo.Type, anomalyInfo.Severity, anomalyInfo.Confidence);
     }
 
-    private static TcpFlags ExtractTcpFlags(TcpPacket? tcpPacket)
-    {
-        if (tcpPacket == null) return new TcpFlags();
+    #endregion
 
-        return new TcpFlags
-        {
-            Syn = tcpPacket.Synchronize,
-            Ack = tcpPacket.Acknowledgment,
-            Fin = tcpPacket.Finished,
-            Rst = tcpPacket.Reset,
-            Psh = tcpPacket.Push,
-            Urg = tcpPacket.Urgent
-        };
-    }
+    #region Flow Statistics Update
 
     private static void UpdateFlowStats(FlowTracker flowTracker, PacketInfo packetInfo, DateTime timestamp)
     {
@@ -273,6 +304,151 @@ public static class PcapToCsvExporter
             flowTracker.PortActivity[(ushort)packetInfo.DestinationPort] = count + 1;
         }
     }
+
+    #endregion
+
+    #region Calculation
+
+    private static PayloadFeatures CalculatePayloadFeatures(byte[] payloadData, ShannonEntropy entropyCalculator)
+    {
+        if (payloadData.Length == 0)
+        {
+            return new PayloadFeatures { Entropy = 0, UniqueCharacters = 0, AsciiRatio = 0 };
+        }
+
+        var entropy = entropyCalculator.Calculate(payloadData);
+        var uniqueChars = payloadData.Distinct().Count();
+        var asciiCount = payloadData.Count(b => b >= 32 && b <= 126);
+        var asciiRatio = (double)asciiCount / payloadData.Length;
+
+        return new PayloadFeatures
+        {
+            Entropy = entropy,
+            UniqueCharacters = uniqueChars,
+            AsciiRatio = asciiRatio
+        };
+    }
+
+    private static TimingFeatures CalculateTimingFeatures(DateTime currentTime, DateTime? previousTime)
+    {
+        var interPacketInterval = previousTime.HasValue ?
+            (currentTime - previousTime.Value).TotalMilliseconds : 0;
+
+        return new TimingFeatures
+        {
+            InterPacketInterval = interPacketInterval,
+            IsNightTime = currentTime.Hour >= 22 || currentTime.Hour <= 6,
+            IsWeekend = currentTime.DayOfWeek == DayOfWeek.Saturday || currentTime.DayOfWeek == DayOfWeek.Sunday,
+            HourOfDay = currentTime.Hour,
+            DayOfWeek = (int)currentTime.DayOfWeek
+        };
+    }
+
+    #endregion
+
+    #region CSV Generation
+
+    // File: CsvExport.cs
+
+    private static string GenerateCsvHeader()
+    {
+        var headers = typeof(EnhancedNetworkPacketData)
+            .GetProperties()
+            .Select(prop => prop.GetCustomAttributes(typeof(DisplayAttribute), false)
+                .Cast<DisplayAttribute>()
+                .FirstOrDefault()?.Name ?? prop.Name);
+
+        headers = headers.Append("AnomalyType").Append("AnomalySeverity").Append("AnomalyConfidence");
+
+        return string.Join(",", headers);
+    }
+
+    private static string BuildCsvLine(EnhancedNetworkPacketData packet, string anomalyType, string anomalySeverity, float anomalyConfidence)
+    {
+        var values = new List<string>();
+
+        foreach (var prop in typeof(EnhancedNetworkPacketData).GetProperties())
+        {
+            var value = prop.GetValue(packet);
+            switch (value)
+            {
+                case string s:
+                    values.Add(EscapeCsvValue(s));
+                    break;
+                case bool b:
+                    values.Add(b.ToString().ToLower());
+                    break;
+                case float f:
+                    values.Add(f.ToString("F4", CultureInfo.InvariantCulture));
+                    break;
+                case double d:
+                    values.Add(d.ToString("F4", CultureInfo.InvariantCulture));
+                    break;
+                case int or long:
+                    values.Add(value.ToString());
+                    break;
+                default:
+                    values.Add(string.Empty);
+                    break;
+            }
+        }
+
+        values.Add(EscapeCsvValue(anomalyType));
+        values.Add(EscapeCsvValue(anomalySeverity));
+        values.Add(anomalyConfidence.ToString("F4", CultureInfo.InvariantCulture));
+
+        return string.Join(",", values);
+    }
+
+    private static string EscapeCsvValue(string input)
+    {
+        if (string.IsNullOrEmpty(input)) return "";
+        if (input.Contains(",") || input.Contains("\""))
+            return $"\"{input.Replace("\"", "\"\"")}\"";
+        return input;
+    }
+
+    #endregion
+
+    #region File Writing
+
+    private static async Task WriteBatchAsync(string filePath, List<string> lines)
+    {
+        await File.AppendAllLinesAsync(filePath, lines);
+    }
+
+    #endregion
+
+    #region Get
+
+    private static async Task<List<IPAddress>> GetLocalIPAddressesAsync()
+    {
+        return await Task.Run(() =>
+        {
+            try
+            {
+                return Dns.GetHostAddresses(Dns.GetHostName()).ToList();
+            }
+            catch
+            {
+                return new List<IPAddress>();
+            }
+        });
+    }
+
+    private static byte[] GetPayloadData(Packet packet)
+    {
+        var current = packet;
+        while (current?.PayloadPacket != null)
+        {
+            current = current.PayloadPacket;
+        }
+        return current?.PayloadData ?? Array.Empty<byte>();
+    }
+
+    #endregion
+
+    #region Data Extraction Methods
 
     private static ApplicationLayerInfo ExtractApplicationLayerInfoAsync(
         TcpPacket? tcpPacket,
@@ -316,155 +492,42 @@ public static class PcapToCsvExporter
         return info;
     }
 
-    private static PayloadFeatures CalculatePayloadFeatures(byte[] payloadData, ShannonEntropy entropyCalculator)
+    private static PacketInfo ExtractPacketInfo(PacketCapture capture, IPPacket ipPacket, TcpPacket? tcpPacket, UdpPacket? udpPacket)
     {
-        if (payloadData.Length == 0)
+        return new PacketInfo
         {
-            return new PayloadFeatures { Entropy = 0, UniqueCharacters = 0, AsciiRatio = 0 };
-        }
-
-        var entropy = entropyCalculator.Calculate(payloadData);
-        var uniqueChars = payloadData.Distinct().Count();
-        var asciiCount = payloadData.Count(b => b >= 32 && b <= 126);
-        var asciiRatio = (double)asciiCount / payloadData.Length;
-
-        return new PayloadFeatures
-        {
-            Entropy = entropy,
-            UniqueCharacters = uniqueChars,
-            AsciiRatio = asciiRatio
+            Timestamp = capture.Header.Timeval.Date,
+            SourceIP = ipPacket.SourceAddress.ToString(),
+            DestinationIP = ipPacket.DestinationAddress.ToString(),
+            Protocol = ipPacket.Protocol.ToString(),
+            PacketLength = ipPacket.TotalLength,
+            HeaderLength = ipPacket.HeaderLength,
+            PayloadLength = ipPacket.PayloadPacket?.TotalPacketLength ?? 0,
+            TTL = ipPacket.TimeToLive,
+            //IsFragmented = ipPacket.FragmentFlags.HasFlag(IPPacket.IPFragmentFlags.MoreFragments) || ipPacket.FragmentOffset > 0,
+            //FragmentOffset = ipPacket.FragmentOffset,
+            SourcePort = tcpPacket?.SourcePort ?? udpPacket?.SourcePort ?? 0,
+            DestinationPort = tcpPacket?.DestinationPort ?? udpPacket?.DestinationPort ?? 0,
+            TcpFlags = ExtractTcpFlags(tcpPacket),
+            TcpWindowSize = tcpPacket?.WindowSize ?? 0,
+            TcpSequenceNumber = tcpPacket?.SequenceNumber ?? 0,
+            TcpAcknowledgmentNumber = tcpPacket?.AcknowledgmentNumber ?? 0
         };
     }
 
-    private static TimingFeatures CalculateTimingFeatures(DateTime currentTime, DateTime? previousTime)
+    private static TcpFlags ExtractTcpFlags(TcpPacket? tcpPacket)
     {
-        var interPacketInterval = previousTime.HasValue ?
-            (currentTime - previousTime.Value).TotalMilliseconds : 0;
+        if (tcpPacket == null) return new TcpFlags();
 
-        return new TimingFeatures
+        return new TcpFlags
         {
-            InterPacketInterval = interPacketInterval,
-            IsNightTime = currentTime.Hour >= 22 || currentTime.Hour <= 6,
-            IsWeekend = currentTime.DayOfWeek == DayOfWeek.Saturday || currentTime.DayOfWeek == DayOfWeek.Sunday,
-            HourOfDay = currentTime.Hour,
-            DayOfWeek = (int)currentTime.DayOfWeek
+            Syn = tcpPacket.Synchronize,
+            Ack = tcpPacket.Acknowledgment,
+            Fin = tcpPacket.Finished,
+            Rst = tcpPacket.Reset,
+            Psh = tcpPacket.Push,
+            Urg = tcpPacket.Urgent
         };
-    }
-
-    private static string BuildCsvLine(
-        PacketInfo packetInfo,
-        FlowTracker flowTracker,
-        ApplicationLayerInfo appLayerInfo,
-        PayloadFeatures payloadFeatures,
-        TimingFeatures timingFeatures,
-        AnomalyInfo anomalyInfo,
-        DateTime timestamp)
-    {
-        var values = new object[]
-        {
-            timestamp.ToString("o"),
-            EscapeCsvValue(packetInfo.SourceIP),
-            EscapeCsvValue(packetInfo.DestinationIP),
-            packetInfo.SourcePort,
-            packetInfo.DestinationPort,
-            EscapeCsvValue(packetInfo.Protocol),
-            packetInfo.PacketLength,
-            packetInfo.HeaderLength,
-            packetInfo.PayloadLength,
-            packetInfo.TTL,
-            packetInfo.IsFragmented.ToString().ToLower(),
-            packetInfo.FragmentOffset,
-            packetInfo.TcpFlags.Syn.ToString().ToLower(),
-            packetInfo.TcpFlags.Ack.ToString().ToLower(),
-            packetInfo.TcpFlags.Fin.ToString().ToLower(),
-            packetInfo.TcpFlags.Rst.ToString().ToLower(),
-            packetInfo.TcpFlags.Psh.ToString().ToLower(),
-            packetInfo.TcpFlags.Urg.ToString().ToLower(),
-            packetInfo.TcpWindowSize,
-            packetInfo.TcpSequenceNumber,
-            packetInfo.TcpAcknowledgmentNumber,
-            timingFeatures.InterPacketInterval.ToString("F2", CultureInfo.InvariantCulture),
-            flowTracker.PacketCount,
-            flowTracker.TotalBytes,
-            flowTracker.Duration.ToString("F2", CultureInfo.InvariantCulture),
-            flowTracker.BytesPerSecond.ToString("F2", CultureInfo.InvariantCulture),
-            flowTracker.PacketsPerSecond.ToString("F2", CultureInfo.InvariantCulture),
-            payloadFeatures.Entropy.ToString("F4", CultureInfo.InvariantCulture),
-            payloadFeatures.UniqueCharacters,
-            payloadFeatures.AsciiRatio.ToString("F4", CultureInfo.InvariantCulture),
-            timingFeatures.IsNightTime.ToString().ToLower(),
-            timingFeatures.IsWeekend.ToString().ToLower(),
-            timingFeatures.HourOfDay,
-            timingFeatures.DayOfWeek,
-            appLayerInfo.IsDnsQuery.ToString().ToLower(),
-            appLayerInfo.IsDnsResponse.ToString().ToLower(),
-            appLayerInfo.DnsQuestionCount,
-            appLayerInfo.DnsAnswerCount,
-            EscapeCsvValue(appLayerInfo.DnsDomain),
-            appLayerInfo.IsHttpRequest.ToString().ToLower(),
-            appLayerInfo.IsHttpResponse.ToString().ToLower(),
-            EscapeCsvValue(appLayerInfo.HttpMethod),
-            appLayerInfo.HttpStatusCode,
-            EscapeCsvValue(appLayerInfo.HttpUserAgent),
-            EscapeCsvValue(appLayerInfo.HttpHost),
-            IsIPv4Broadcast(packetInfo.DestinationIP).ToString().ToLower(),
-            IsIPv4Multicast(packetInfo.DestinationIP).ToString().ToLower(),
-            IsPrivateIP(packetInfo.SourceIP).ToString().ToLower(),
-            IsLoopbackIP(packetInfo.SourceIP).ToString().ToLower(),
-            IsWellKnownPort(packetInfo.DestinationPort).ToString().ToLower(),
-            (flowTracker.UniqueDestinationPorts.Count > PORT_SCAN_THRESHOLD).ToString().ToLower(),
-            anomalyInfo.IsAnomaly.ToString().ToLower(),
-            EscapeCsvValue(anomalyInfo.Type),
-            EscapeCsvValue(anomalyInfo.Severity),
-            anomalyInfo.Confidence.ToString("F4", CultureInfo.InvariantCulture)
-        };
-
-        return string.Join(",", values);
-    }
-
-    private static string EscapeCsvValue(string value)
-    {
-        if (string.IsNullOrEmpty(value))
-            return string.Empty;
-
-        if (value.Contains(",") || value.Contains("\"") || value.Contains("\n") || value.Contains("\r"))
-        {
-            return $"\"{value.Replace("\"", "\"\"")}\"";
-        }
-
-        return value;
-    }
-
-    private static async Task WriteBatchAsync(string filePath, List<string> lines)
-    {
-        await File.AppendAllLinesAsync(filePath, lines);
-    }
-
-    private static async Task<List<IPAddress>> GetLocalIPAddressesAsync()
-    {
-        return await Task.Run(() =>
-        {
-            try
-            {
-                return Dns.GetHostAddresses(Dns.GetHostName()).ToList();
-            }
-            catch
-            {
-                return new List<IPAddress>();
-            }
-        });
-    }
-
-    #region Data Extraction Methods
-
-    private static byte[] GetPayloadData(Packet packet)
-    {
-        var current = packet;
-        while (current?.PayloadPacket != null)
-        {
-            current = current.PayloadPacket;
-        }
-        return current?.PayloadData ?? Array.Empty<byte>();
     }
 
     private static (string Query, string Response, int QuestionCount, int AnswerCount) ExtractDnsInfo(byte[] payload)
@@ -794,10 +857,10 @@ public static class PcapToCsvExporter
     public class NetworkAnomalyDetector
     {
         private static readonly HashSet<int> SuspiciousPorts = new()
-    {
-        4444, 31337, 666, 1337, 12345, 54321, 2323, 5555, 6666, 7777, 8888, 9999,
-        1234, 6667, 27374, 30303, 32768, 32769, 40421, 40426, 49301, 54320
-    };
+        {
+            4444, 31337, 666, 1337, 12345, 54321, 2323, 5555, 6666, 7777, 8888, 9999,
+            1234, 6667, 27374, 30303, 32768, 32769, 40421, 40426, 49301, 54320
+        };
 
         public AnomalyInfo DetectAnomaliesAsync(
             PacketInfo packetInfo,
@@ -910,39 +973,3 @@ public static class PcapToCsvExporter
         }
     }
 }
-
-/// <summary>
-/// Shannon entropy calculator for payload analysis
-/// </summary>
-public class ShannonEntropy
-{
-    private readonly Dictionary<byte, int> _frequencyCache = new();
-
-    public double Calculate(byte[] data)
-    {
-        if (data == null || data.Length == 0)
-            return 0;
-
-        _frequencyCache.Clear();
-
-        // Count byte frequencies
-        foreach (var b in data)
-        {
-            _frequencyCache.TryGetValue(b, out var count);
-            _frequencyCache[b] = count + 1;
-        }
-
-        // Calculate Shannon entropy
-        double entropy = 0;
-        double length = data.Length;
-
-        foreach (var frequency in _frequencyCache.Values)
-        {
-            double probability = frequency / length;
-            entropy -= probability * Math.Log2(probability);
-        }
-
-        return entropy;
-    }
-}
-

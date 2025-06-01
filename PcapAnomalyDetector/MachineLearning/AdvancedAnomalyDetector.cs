@@ -5,7 +5,6 @@ using PcapAnomalyDetector.Detection;
 using PcapAnomalyDetector.Models;
 using System.Collections.Concurrent;
 using static Microsoft.ML.DataOperationsCatalog;
-using static PcapAnomalyDetector.MachineLearning.TrainingResult;
 
 namespace PcapAnomalyDetector.MachineLearning;
 
@@ -729,22 +728,4 @@ public class AdvancedAnomalyDetector : IDisposable
     }
 
     #endregion
-}
-
-public class TrainingResult
-{
-    public bool Success { get; set; } = true;
-    public string ErrorMessage { get; set; } = string.Empty;
-    public Dictionary<string, ModelMetrics> ModelMetrics { get; set; } = new();
-    public TimeSpan TrainingDuration { get; set; }
-}
-
-public class ModelMetrics
-{
-    public double Accuracy { get; set; }
-    public double F1Score { get; set; }
-    public double Precision { get; set; }
-    public double Recall { get; set; }
-    public double AUC { get; set; }
-    public double DetectionRateAtFalsePositiveCount { get; set; }
 }
