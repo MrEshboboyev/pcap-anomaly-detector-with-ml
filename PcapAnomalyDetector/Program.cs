@@ -3,33 +3,42 @@ using PcapAnomalyDetector.Exporters;
 using PcapAnomalyDetector.FeatureExtraction;
 using PcapAnomalyDetector.MachineLearning;
 
+Console.WriteLine("Extracting packet features from PCAP...");
+var extractor = new EnhancedPacketFeatureExtractor();
+var packets = extractor.ExtractFromPcap("experiment.pcapng");
 
-Console.WriteLine("Enter path to .pcap file:");
-var path = Console.ReadLine();
-
-EnhancedPacketFeatureExtractor extractor = new();
-var packets = extractor.ExtractFromPcap(path);
-
-Console.WriteLine("Traditional Detection:");
-foreach (var p in packets)
+Console.WriteLine("\nTraditional Detection:");
+foreach (var packet in packets)
 {
-    if (TraditionalDetector.IsSuspicious(p))
-        Console.WriteLine($"[ALERT] {p.SourceIP} -> {p.DestinationIP} Protocol: {p.Protocol}, Size: {p.PayloadLength}");
+    if (TraditionalDetector.IsSuspicious(packet))
+    {
+        Console.WriteLine($"[ALERT] {packet.SourceIP} -> {packet.DestinationIP} Protocol: {packet.Protocol}, Size: {packet.PayloadLength}");
+    }
 }
 
+Console.WriteLine("\nPreparing for ML detection...");
+await Task.Delay(1000); // Slight delay for clarity
+
+var csvPath = "network_traffic.csv";
+var modelPath = "model.zip";
+var pcapInput = "C://MrEshboboyev//PcapAnomalyDetector//test.pcapng";
+
+Console.WriteLine("\nExporting PCAP to CSV...");
+PcapToCsvExporter.ConvertPcapToCsv(pcapInput, csvPath);
+
+Console.WriteLine("\nTraining ML models...");
+var trainer = new AdvancedAnomalyDetector();
+await trainer.TrainMultipleModels(csvPath, modelPath);
+
+Console.WriteLine("\nLoading trained model...");
+var mlDetector = new MlAnomalyDetector(modelPath);
+
 Console.WriteLine("\nML Detection:");
-
-Task.Delay(3000).Wait(); // Wait for a second to separate outputs
-Console.WriteLine("Training started ... ");
-PcapToCsvExporter.ConvertPcapToCsv("C://MrEshboboyev//PcapAnomalyDetector//test.pcapng", "network_traffic.csv");
-AdvancedAnomalyDetector detector = new();
-await detector.TrainMultipleModels("network_traffic.csv", "model.zip");
-Console.WriteLine("\n\nTraining completed ... ");
-
-var ml = new MlAnomalyDetector("model.zip");
-foreach (var p in packets)
+foreach (var packet in packets)
 {
-    var prediction = ml.Predict(p);
+    var prediction = mlDetector.Predict(packet);
     if (prediction.PredictedLabel)
-        Console.WriteLine($"[ANOMALY] {p.SourceIP} -> {p.DestinationIP} | Score: {prediction.Score:0.000}");
+    {
+        Console.WriteLine($"[ANOMALY] {packet.SourceIP} -> {packet.DestinationIP} | Score: {prediction.Score:F4}");
+    }
 }

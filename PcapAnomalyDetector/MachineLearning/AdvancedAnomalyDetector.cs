@@ -1,6 +1,8 @@
 ﻿using Microsoft.ML;
 using Microsoft.ML.Data;
+using Microsoft.ML.Trainers;
 using Microsoft.ML.Trainers.LightGbm;
+using Microsoft.ML.Transforms;
 using PcapAnomalyDetector.Detection;
 using PcapAnomalyDetector.Models;
 using System.Collections.Concurrent;
@@ -22,6 +24,8 @@ public class AdvancedAnomalyDetector : IDisposable
         _models = new ConcurrentDictionary<string, ITransformer>();
         _engines = new ConcurrentDictionary<string, PredictionEngine<EnhancedNetworkPacketData, AnomalyPrediction>>();
     }
+
+    #region Training
 
     public async Task<TrainingResult> TrainMultipleModels(string csvPath, string modelBasePath)
     {
@@ -82,6 +86,10 @@ public class AdvancedAnomalyDetector : IDisposable
         }
     }
 
+    #endregion
+
+    #region Data Validation
+
     private bool ValidateDataIntegrity(IDataView data)
     {
         try
@@ -107,6 +115,8 @@ public class AdvancedAnomalyDetector : IDisposable
             return false;
         }
     }
+
+    #endregion
 
     #region Model Training Methods
 
@@ -178,27 +188,16 @@ public class AdvancedAnomalyDetector : IDisposable
         };
 
         // Build the pipeline step by step with explicit typing
-        IEstimator<ITransformer> pipeline = _mlContext.Transforms.ReplaceMissingValues(
-                outputColumnName: nameof(EnhancedNetworkPacketData.Protocol),
-                inputColumnName: nameof(EnhancedNetworkPacketData.Protocol),
-                replacementMode: Microsoft.ML.Transforms.MissingValueReplacingEstimator.ReplacementMode.DefaultValue)
-            .Append(_mlContext.Transforms.Text.FeaturizeText(
+        IEstimator<ITransformer> pipeline = _mlContext.Transforms.Text.FeaturizeText(
                 outputColumnName: "ProtocolFeatures",
-                inputColumnName: nameof(EnhancedNetworkPacketData.Protocol)))
-            .Append(_mlContext.Transforms.ReplaceMissingValues(
-                outputColumnName: nameof(EnhancedNetworkPacketData.ApplicationProtocol),
-                inputColumnName: nameof(EnhancedNetworkPacketData.ApplicationProtocol),
-                replacementMode: Microsoft.ML.Transforms.MissingValueReplacingEstimator.ReplacementMode.DefaultValue))
+                inputColumnName: nameof(EnhancedNetworkPacketData.Protocol))
             .Append(_mlContext.Transforms.Text.FeaturizeText(
                 outputColumnName: "AppProtocolFeatures",
                 inputColumnName: nameof(EnhancedNetworkPacketData.ApplicationProtocol)))
-            .Append(_mlContext.Transforms.ReplaceMissingValues(
-                outputColumnName: "HttpMethodCleaned",
-                inputColumnName: nameof(EnhancedNetworkPacketData.HttpMethod),
-                replacementMode: Microsoft.ML.Transforms.MissingValueReplacingEstimator.ReplacementMode.DefaultValue))
             .Append(_mlContext.Transforms.Text.FeaturizeText(
                 outputColumnName: "HttpMethodFeatures",
-                inputColumnName: "HttpMethodCleaned"));
+                inputColumnName: nameof(EnhancedNetworkPacketData.HttpMethod)));
+
 
         // Add categorical encodings with null handling
         pipeline = pipeline
@@ -216,7 +215,7 @@ public class AdvancedAnomalyDetector : IDisposable
                 .Append(_mlContext.Transforms.ReplaceMissingValues(
                     outputColumnName: column,
                     inputColumnName: column,
-                    replacementMode: Microsoft.ML.Transforms.MissingValueReplacingEstimator.ReplacementMode.Mean))
+                    replacementMode: MissingValueReplacingEstimator.ReplacementMode.Mean))
                 .Append(_mlContext.Transforms.Conversion.ConvertType(
                     outputColumnName: column,
                     inputColumnName: column,
@@ -248,6 +247,70 @@ public class AdvancedAnomalyDetector : IDisposable
 
         return pipeline;
     }
+
+    private IEstimator<ITransformer> BuildOneClassSvmPipeline()
+    {
+        return _mlContext.Transforms.Text.FeaturizeText(
+            outputColumnName: "ProtocolFeatures",
+            inputColumnName: nameof(EnhancedNetworkPacketData.Protocol))
+
+        .Append(_mlContext.Transforms.ReplaceMissingValues(
+            outputColumnName: nameof(EnhancedNetworkPacketData.FlowBytesPerSecond),
+            inputColumnName: nameof(EnhancedNetworkPacketData.FlowBytesPerSecond),
+            replacementMode: MissingValueReplacingEstimator.ReplacementMode.Mean))
+        .Append(_mlContext.Transforms.Conversion.ConvertType(
+            outputColumnName: "FlowBytesPerSecondFloat",
+            inputColumnName: nameof(EnhancedNetworkPacketData.FlowBytesPerSecond),
+            outputKind: DataKind.Single))
+
+        .Append(_mlContext.Transforms.ReplaceMissingValues(
+            outputColumnName: nameof(EnhancedNetworkPacketData.PacketLength),
+            inputColumnName: nameof(EnhancedNetworkPacketData.PacketLength),
+            replacementMode: MissingValueReplacingEstimator.ReplacementMode.Mean))
+        .Append(_mlContext.Transforms.Conversion.ConvertType(
+            outputColumnName: "PacketLengthFloat",
+            inputColumnName: nameof(EnhancedNetworkPacketData.PacketLength),
+            outputKind: DataKind.Single))
+
+        .Append(_mlContext.Transforms.ReplaceMissingValues(
+            outputColumnName: nameof(EnhancedNetworkPacketData.PayloadLength),
+            inputColumnName: nameof(EnhancedNetworkPacketData.PayloadLength),
+            replacementMode: MissingValueReplacingEstimator.ReplacementMode.Mean))
+        .Append(_mlContext.Transforms.Conversion.ConvertType(
+            outputColumnName: "PayloadLengthFloat",
+            inputColumnName: nameof(EnhancedNetworkPacketData.PayloadLength),
+            outputKind: DataKind.Single))
+
+        .Append(_mlContext.Transforms.ReplaceMissingValues(
+            outputColumnName: nameof(EnhancedNetworkPacketData.PayloadEntropy),
+            inputColumnName: nameof(EnhancedNetworkPacketData.PayloadEntropy),
+            replacementMode: MissingValueReplacingEstimator.ReplacementMode.Mean))
+        .Append(_mlContext.Transforms.Conversion.ConvertType(
+            outputColumnName: "PayloadEntropyFloat",
+            inputColumnName: nameof(EnhancedNetworkPacketData.PayloadEntropy),
+            outputKind: DataKind.Single))
+
+        .Append(_mlContext.Transforms.Concatenate("Features",
+            "ProtocolFeatures",
+            "PacketLengthFloat",
+            "PayloadLengthFloat",
+            "PayloadEntropyFloat",
+            "FlowBytesPerSecondFloat"))
+
+        .Append(_mlContext.Transforms.NormalizeMinMax("Features"))
+        .Append(_mlContext.AnomalyDetection.Trainers.RandomizedPca(
+            new RandomizedPcaTrainer.Options
+            {
+                FeatureColumnName = "Features",
+                Rank = 10,
+                Oversampling = 10
+            }));
+
+    }
+
+    #endregion
+
+    #region Data Preparation for One-Class SVM
 
     private IDataView PrepareOneClassData(IDataView trainSet)
     {
@@ -302,60 +365,6 @@ public class AdvancedAnomalyDetector : IDisposable
         }
     }
 
-    private IEstimator<ITransformer> BuildOneClassSvmPipeline()
-    {
-        return _mlContext.Transforms.ReplaceMissingValues(
-                outputColumnName: nameof(EnhancedNetworkPacketData.Protocol),
-                inputColumnName: nameof(EnhancedNetworkPacketData.Protocol),
-                replacementMode: Microsoft.ML.Transforms.MissingValueReplacingEstimator.ReplacementMode.DefaultValue)
-            .Append(_mlContext.Transforms.Text.FeaturizeText(
-                outputColumnName: "ProtocolFeatures",
-                inputColumnName: nameof(EnhancedNetworkPacketData.Protocol)))
-            .Append(_mlContext.Transforms.ReplaceMissingValues(
-                outputColumnName: nameof(EnhancedNetworkPacketData.FlowBytesPerSecond),
-                inputColumnName: nameof(EnhancedNetworkPacketData.FlowBytesPerSecond),
-                replacementMode: Microsoft.ML.Transforms.MissingValueReplacingEstimator.ReplacementMode.Mean))
-            .Append(_mlContext.Transforms.Conversion.ConvertType(
-                outputColumnName: "FlowBytesPerSecondFloat",
-                inputColumnName: nameof(EnhancedNetworkPacketData.FlowBytesPerSecond),
-                outputKind: DataKind.Single))
-            .Append(_mlContext.Transforms.ReplaceMissingValues(
-                outputColumnName: nameof(EnhancedNetworkPacketData.PacketLength),
-                inputColumnName: nameof(EnhancedNetworkPacketData.PacketLength),
-                replacementMode: Microsoft.ML.Transforms.MissingValueReplacingEstimator.ReplacementMode.Mean))
-            .Append(_mlContext.Transforms.Conversion.ConvertType(
-                outputColumnName: "PacketLengthFloat",
-                inputColumnName: nameof(EnhancedNetworkPacketData.PacketLength),
-                outputKind: DataKind.Single))
-            .Append(_mlContext.Transforms.ReplaceMissingValues(
-                outputColumnName: nameof(EnhancedNetworkPacketData.PayloadLength),
-                inputColumnName: nameof(EnhancedNetworkPacketData.PayloadLength),
-                replacementMode: Microsoft.ML.Transforms.MissingValueReplacingEstimator.ReplacementMode.Mean))
-            .Append(_mlContext.Transforms.Conversion.ConvertType(
-                outputColumnName: "PayloadLengthFloat",
-                inputColumnName: nameof(EnhancedNetworkPacketData.PayloadLength),
-                outputKind: DataKind.Single))
-            .Append(_mlContext.Transforms.ReplaceMissingValues(
-                outputColumnName: nameof(EnhancedNetworkPacketData.PayloadEntropy),
-                inputColumnName: nameof(EnhancedNetworkPacketData.PayloadEntropy),
-                replacementMode: Microsoft.ML.Transforms.MissingValueReplacingEstimator.ReplacementMode.Mean))
-            .Append(_mlContext.Transforms.Conversion.ConvertType(
-                outputColumnName: "PayloadEntropyFloat",
-                inputColumnName: nameof(EnhancedNetworkPacketData.PayloadEntropy),
-                outputKind: DataKind.Single))
-            .Append(_mlContext.Transforms.Concatenate("Features",
-                "ProtocolFeatures",
-                "PacketLengthFloat",
-                "PayloadLengthFloat",
-                "PayloadEntropyFloat",
-                "FlowBytesPerSecondFloat"))
-            .Append(_mlContext.Transforms.NormalizeMinMax("Features"))
-            .Append(_mlContext.AnomalyDetection.Trainers.RandomizedPca(
-                featureColumnName: "Features",
-                rank: 10,
-                oversampling: 10));
-    }
-
     #endregion
 
     #region Helper Methods
@@ -375,6 +384,10 @@ public class AdvancedAnomalyDetector : IDisposable
             Console.WriteLine($"❌ Failed to save model {key}: {ex.Message}");
         }
     }
+
+    #endregion
+
+    #region Evaluators
 
     private void EvaluateBinaryClassificationModel(ITransformer model, IDataView testSet, TrainingResult result)
     {
@@ -418,293 +431,6 @@ public class AdvancedAnomalyDetector : IDisposable
         catch (Exception ex)
         {
             Console.WriteLine($"❌ One-Class SVM evaluation failed: {ex.Message}");
-        }
-    }
-
-    #endregion
-
-    #region Detection Methods
-
-    public async Task<List<AnomalyResult>> DetectAnomalies(List<EnhancedNetworkPacketData> packets)
-    {
-        if (packets == null || packets.Count == 0)
-            return new List<AnomalyResult>();
-
-        var tasks = new List<Task<List<AnomalyResult>>>();
-
-        // Parallel anomaly detection using different models
-        if (_models.ContainsKey("BinaryClassification"))
-            tasks.Add(DetectWithBinaryClassification(packets));
-
-        if (_models.ContainsKey("OneClassSVM"))
-            tasks.Add(DetectWithOneClassSVM(packets));
-
-        if (_models.ContainsKey("IsolationForest"))
-            tasks.Add(DetectWithIsolationForest(packets));
-
-        // Rule-based detection
-        tasks.Add(DetectWithRules(packets));
-
-        if (tasks.Count == 0)
-            return new List<AnomalyResult>();
-
-        var allResults = await Task.WhenAll(tasks);
-
-        // Ensemble voting - combine results from multiple models
-        return CombineEnsembleResults(allResults.SelectMany(r => r));
-    }
-
-    private async Task<List<AnomalyResult>> DetectWithBinaryClassification(List<EnhancedNetworkPacketData> packets)
-    {
-        return await Task.Run(() =>
-        {
-            var results = new List<AnomalyResult>();
-            var engine = GetOrCreatePredictionEngine("BinaryClassification");
-            if (engine == null) return results;
-
-            foreach (var packet in packets)
-            {
-                try
-                {
-                    var prediction = engine.Predict(packet);
-                    if (prediction.PredictedLabel)
-                    {
-                        results.Add(new AnomalyResult
-                        {
-                            IsAnomaly = true,
-                            Confidence = prediction.Probability,
-                            //AnomalyType = "ML_Binary_Classification",
-                            AnomalyType = AnomalyType.Unknown,
-                            Description = $"Binary classification detected anomaly with {prediction.Probability:P2} confidence",
-                            Severity = GetSeverityLevel(prediction.Probability),
-                            DetectedAt = DateTime.UtcNow,
-                            Metadata = new Dictionary<string, object>
-                            {
-                                ["SourceIP"] = packet.SourceIP ?? string.Empty,
-                                ["DestinationIP"] = packet.DestinationIP ?? string.Empty,
-                                ["Protocol"] = packet.Protocol ?? string.Empty,
-                                ["PacketLength"] = packet.PacketLength,
-                                ["Score"] = prediction.Score
-                            }
-                        });
-                    }
-                }
-                catch (Exception ex)
-                {
-                    Console.WriteLine($"❌ Error in binary classification prediction: {ex.Message}");
-                }
-            }
-            return results;
-        });
-    }
-
-    private async Task<List<AnomalyResult>> DetectWithOneClassSVM(List<EnhancedNetworkPacketData> packets)
-    {
-        return await Task.Run(() =>
-        {
-            var results = new List<AnomalyResult>();
-            var engine = GetOrCreatePredictionEngine("OneClassSVM");
-            if (engine == null) return results;
-
-            foreach (var packet in packets)
-            {
-                try
-                {
-                    var prediction = engine.Predict(packet);
-                    if (prediction.PredictedLabel)
-                    {
-                        results.Add(new AnomalyResult
-                        {
-                            IsAnomaly = true,
-                            Confidence = Math.Abs(prediction.Score),
-                            //AnomalyType = "ML_OneClass_SVM",
-                            AnomalyType = AnomalyType.Unknown,
-                            Description = "One-Class SVM detected outlier behavior",
-                            Severity = GetSeverityLevel(Math.Abs(prediction.Score)),
-                            DetectedAt = DateTime.UtcNow,
-                            Metadata = new Dictionary<string, object>
-                            {
-                                ["SourceIP"] = packet.SourceIP ?? string.Empty,
-                                ["DestinationIP"] = packet.DestinationIP ?? string.Empty,
-                                ["Protocol"] = packet.Protocol ?? string.Empty,
-                                ["Score"] = prediction.Score
-                            }
-                        });
-                    }
-                }
-                catch (Exception ex)
-                {
-                    Console.WriteLine($"❌ Error in One-Class SVM prediction: {ex.Message}");
-                }
-            }
-            return results;
-        });
-    }
-
-    private async Task<List<AnomalyResult>> DetectWithIsolationForest(List<EnhancedNetworkPacketData> packets)
-    {
-        return await Task.Run(() =>
-        {
-            var results = new List<AnomalyResult>();
-            var engine = GetOrCreatePredictionEngine("IsolationForest");
-            if (engine == null) return results;
-
-            foreach (var packet in packets)
-            {
-                try
-                {
-                    var prediction = engine.Predict(packet);
-                    if (prediction.PredictedLabel)
-                    {
-                        results.Add(new AnomalyResult
-                        {
-                            IsAnomaly = true,
-                            Confidence = Math.Abs(prediction.Score),
-                            //AnomalyType = "ML_Isolation_Forest",
-                            AnomalyType = AnomalyType.Unknown,
-                            Description = "Isolation Forest detected anomalous pattern",
-                            Severity = GetSeverityLevel(Math.Abs(prediction.Score)),
-                            DetectedAt = DateTime.UtcNow,
-                            Metadata = new Dictionary<string, object>
-                            {
-                                ["SourceIP"] = packet.SourceIP ?? string.Empty,
-                                ["DestinationIP"] = packet.DestinationIP ?? string.Empty,
-                                ["PacketLength"] = packet.PacketLength,
-                                ["PayloadEntropy"] = packet.PayloadEntropy,
-                                ["Score"] = prediction.Score
-                            }
-                        });
-                    }
-                }
-                catch (Exception ex)
-                {
-                    Console.WriteLine($"❌ Error in Isolation Forest prediction: {ex.Message}");
-                }
-            }
-            return results;
-        });
-    }
-
-    private async Task<List<AnomalyResult>> DetectWithRules(List<EnhancedNetworkPacketData> packets)
-    {
-        return await Task.Run(() =>
-        {
-            var results = new List<AnomalyResult>();
-
-            try
-            {
-                var ruleEngine = new RuleBasedDetector();
-                foreach (var packet in packets)
-                {
-                    var ruleResults = ruleEngine.EvaluatePacket(packet);
-                    results.AddRange(ruleResults);
-                }
-            }
-            catch (Exception ex)
-            {
-                Console.WriteLine($"❌ Error in rule-based detection: {ex.Message}");
-            }
-
-            return results;
-        });
-    }
-
-    #endregion
-
-    #region Ensemble Methods
-
-    private List<AnomalyResult> CombineEnsembleResults(IEnumerable<AnomalyResult> allResults)
-    {
-        if (allResults == null || !allResults.Any())
-            return new List<AnomalyResult>();
-
-        var groupedResults = allResults
-            .Where(r => r.Metadata != null)
-            .GroupBy(r => $"{r.Metadata.GetValueOrDefault("SourceIP", string.Empty)}-{r.Metadata.GetValueOrDefault("DestinationIP", string.Empty)}")
-            .Select(g => new AnomalyResult
-            {
-                IsAnomaly = g.Count() >= 2, // Require at least 2 models to agree
-                Confidence = (float)g.Average(r => r.Confidence),
-                //AnomalyType = "Ensemble_Detection",
-                AnomalyType = AnomalyType.Unknown,
-                Description = $"Ensemble detection: {g.Count()} models detected anomaly - Types: {string.Join(", ", g.Select(r => r.AnomalyType).Distinct())}",
-                Severity = GetSeverityLevel((float)g.Average(r => r.Confidence)),
-                DetectedAt = DateTime.UtcNow,
-                Metadata = new Dictionary<string, object>(g.First().Metadata)
-            })
-            .Where(r => r.IsAnomaly)
-            .ToList();
-
-        return groupedResults;
-    }
-
-    private PredictionEngine<EnhancedNetworkPacketData, AnomalyPrediction>? GetOrCreatePredictionEngine(string modelName)
-    {
-        if (_engines.TryGetValue(modelName, out var existingEngine))
-            return existingEngine;
-
-        if (!_models.TryGetValue(modelName, out var model))
-            return null;
-
-        try
-        {
-            var engine = _mlContext.Model.CreatePredictionEngine<EnhancedNetworkPacketData, AnomalyPrediction>(model);
-            _engines[modelName] = engine;
-            return engine;
-        }
-        catch (Exception ex)
-        {
-            Console.WriteLine($"❌ Failed to create prediction engine for {modelName}: {ex.Message}");
-            return null;
-        }
-    }
-
-    private SeverityLevel GetSeverityLevel(float confidence)
-    {
-        return confidence switch
-        {
-            >= 0.9f => SeverityLevel.Critical,
-            >= 0.7f => SeverityLevel.High,
-            >= 0.5f => SeverityLevel.Medium,
-            _ => SeverityLevel.Low
-        };
-    }
-
-    #endregion
-
-    #region Model Loading
-
-    public void LoadModels(string modelBasePath)
-    {
-        var modelFiles = new[]
-        {
-            ("BinaryClassification", "binary_classification_model.zip"),
-            ("OneClassSVM", "oneclass_svm_model.zip"),
-            ("IsolationForest", "isolation_forest_model.zip"),
-            ("DeepLearning", "deep_learning_model.zip"),
-            ("FallbackNN", "fallback_neural_network_model.zip")
-        };
-
-        foreach (var (modelName, fileName) in modelFiles)
-        {
-            var modelPath = Path.Combine(modelBasePath, fileName);
-            if (File.Exists(modelPath))
-            {
-                try
-                {
-                    var model = _mlContext.Model.Load(modelPath, out _);
-                    _models[modelName] = model;
-                    Console.WriteLine($"✅ Loaded model: {modelName}");
-                }
-                catch (Exception ex)
-                {
-                    Console.WriteLine($"❌ Failed to load model {modelName}: {ex.Message}");
-                }
-            }
-            else
-            {
-                Console.WriteLine($"⚠️ Model file not found: {modelPath}");
-            }
         }
     }
 

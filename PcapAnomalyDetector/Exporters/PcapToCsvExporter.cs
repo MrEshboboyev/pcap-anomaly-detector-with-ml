@@ -167,7 +167,11 @@ public static class PcapToCsvExporter
     /// </summary>
     public static void ConvertPcapToCsv(string pcapPath, string csvOutputPath, bool labelAnomalies = true)
     {
+        Console.WriteLine("\n\nConvert pcap to csv: STARTED ...");
+
         ConvertPcapToCsvAsync(pcapPath, csvOutputPath, labelAnomalies).GetAwaiter().GetResult();
+
+        Console.WriteLine("\n\nConvert pcap to csv: FINISHED ...");
     }
 
     #endregion
