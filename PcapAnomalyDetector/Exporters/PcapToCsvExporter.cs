@@ -12,7 +12,7 @@ namespace PcapAnomalyDetector.Exporters;
 /// <summary>
 /// Advanced PCAP to CSV converter with comprehensive network analysis
 /// </summary>
-public static class PcapToCsvExporter
+public static partial class PcapToCsvExporter
 {
     #region Constants
 
@@ -24,40 +24,17 @@ public static class PcapToCsvExporter
 
     #endregion
 
-    #region Flow Tracker
-
-    /// <summary>
-    /// Tracks flow-level statistics for anomaly detection
-    /// </summary>
-    public class FlowTracker
-    {
-        public int PacketCount { get; set; }
-        public long TotalBytes { get; set; }
-        public DateTime FirstSeen { get; set; }
-        public DateTime LastSeen { get; set; }
-        public HashSet<ushort> UniqueDestinationPorts { get; } = new();
-        public Dictionary<ushort, int> PortActivity { get; } = new();
-        public List<double> PacketSizes { get; } = new();
-        public List<double> InterArrivalTimes { get; } = new();
-
-        public double Duration => (LastSeen - FirstSeen).TotalSeconds;
-        public double BytesPerSecond => Duration > 0 ? TotalBytes / Duration : 0;
-        public double PacketsPerSecond => Duration > 0 ? PacketCount / Duration : 0;
-        public double AveragePacketSize => PacketCount > 0 ? (double)TotalBytes / PacketCount : 0;
-    }
-
-    #endregion
-
     #region Convert Pcap to CSV
 
-    /// <summary>
-    /// Converts PCAP file to CSV with comprehensive network features and anomaly detection
-    /// </summary>
-    /// <param name="pcapPath">Path to the PCAP file</param>
-    /// <param name="csvOutputPath">Output CSV file path</param>
-    /// <param name="labelAnomalies">Enable automatic anomaly labeling</param>
-    /// <param name="maxPackets">Maximum number of packets to process (0 = unlimited)</param>
-    /// <param name="progressCallback">Optional progress callback</param>
+    public static void ConvertPcapToCsv(string pcapPath, string csvOutputPath, bool labelAnomalies = true)
+    {
+        Console.WriteLine("\n\nConvert pcap to csv: STARTED ...");
+
+        ConvertPcapToCsvAsync(pcapPath, csvOutputPath, labelAnomalies).GetAwaiter().GetResult();
+
+        Console.WriteLine("\n\nConvert pcap to csv: FINISHED ...");
+    }
+
     public static async Task ConvertPcapToCsvAsync(
         string pcapPath,
         string csvOutputPath,
@@ -67,7 +44,6 @@ public static class PcapToCsvExporter
     {
         if (!File.Exists(pcapPath))
             throw new FileNotFoundException($"PCAP file not found: {pcapPath}");
-        // correct
 
         var flowStats = new ConcurrentDictionary<string, FlowTracker>();
         var protocolStats = new ConcurrentDictionary<string, int>();
@@ -162,18 +138,6 @@ public static class PcapToCsvExporter
         }
     }
 
-    /// <summary>
-    /// Synchronous version of the converter
-    /// </summary>
-    public static void ConvertPcapToCsv(string pcapPath, string csvOutputPath, bool labelAnomalies = true)
-    {
-        Console.WriteLine("\n\nConvert pcap to csv: STARTED ...");
-
-        ConvertPcapToCsvAsync(pcapPath, csvOutputPath, labelAnomalies).GetAwaiter().GetResult();
-
-        Console.WriteLine("\n\nConvert pcap to csv: FINISHED ...");
-    }
-
     #endregion
 
     #region Packet Processing
@@ -193,7 +157,7 @@ public static class PcapToCsvExporter
         var rawPacket = capture.GetPacket();
         var packet = Packet.ParsePacket(rawPacket.LinkLayerType, rawPacket.Data);
         var ipPacket = packet.Extract<IPPacket>();
-        if (ipPacket == null) return null;
+        if (ipPacket == null) return null!;
 
         var tcpPacket = packet.Extract<TcpPacket>();
         var udpPacket = packet.Extract<UdpPacket>();
@@ -352,8 +316,6 @@ public static class PcapToCsvExporter
 
     #region CSV Generation
 
-    // File: CsvExport.cs
-
     private static string GenerateCsvHeader()
     {
         var headers = typeof(EnhancedNetworkPacketData)
@@ -367,7 +329,11 @@ public static class PcapToCsvExporter
         return string.Join(",", headers);
     }
 
-    private static string BuildCsvLine(EnhancedNetworkPacketData packet, string anomalyType, string anomalySeverity, float anomalyConfidence)
+    private static string BuildCsvLine(
+        EnhancedNetworkPacketData packet, 
+        string anomalyType, 
+        string anomalySeverity, 
+        float anomalyConfidence)
     {
         var values = new List<string>();
 
@@ -389,7 +355,7 @@ public static class PcapToCsvExporter
                     values.Add(d.ToString("F4", CultureInfo.InvariantCulture));
                     break;
                 case int or long:
-                    values.Add(value.ToString());
+                    values.Add(value.ToString()!);
                     break;
                 default:
                     values.Add(string.Empty);
@@ -407,7 +373,7 @@ public static class PcapToCsvExporter
     private static string EscapeCsvValue(string input)
     {
         if (string.IsNullOrEmpty(input)) return "";
-        if (input.Contains(",") || input.Contains("\""))
+        if (input.Contains(',') || input.Contains('"'))
             return $"\"{input.Replace("\"", "\"\"")}\"";
         return input;
     }
@@ -431,7 +397,7 @@ public static class PcapToCsvExporter
         {
             try
             {
-                return Dns.GetHostAddresses(Dns.GetHostName()).ToList();
+                return [.. Dns.GetHostAddresses(Dns.GetHostName())];
             }
             catch
             {
@@ -447,7 +413,7 @@ public static class PcapToCsvExporter
         {
             current = current.PayloadPacket;
         }
-        return current?.PayloadData ?? Array.Empty<byte>();
+        return current?.PayloadData ?? [];
     }
 
     #endregion
@@ -496,7 +462,11 @@ public static class PcapToCsvExporter
         return info;
     }
 
-    private static PacketInfo ExtractPacketInfo(PacketCapture capture, IPPacket ipPacket, TcpPacket? tcpPacket, UdpPacket? udpPacket)
+    private static PacketInfo ExtractPacketInfo(
+        PacketCapture capture, 
+        IPPacket ipPacket, 
+        TcpPacket? tcpPacket, 
+        UdpPacket? udpPacket)
     {
         return new PacketInfo
         {
@@ -612,7 +582,8 @@ public static class PcapToCsvExporter
             if (headerText.StartsWith("HTTP/"))
             {
                 var parts = headerText.Split(' ');
-                if (parts.Length >= 2 && int.TryParse(parts[1].Substring(0, Math.Min(3, parts[1].Length)), out var statusCode))
+                if (parts.Length >= 2 && int.TryParse(parts[1].AsSpan(0, Math.Min(3, parts[1].Length)), 
+                    out var statusCode))
                 {
                     return statusCode;
                 }
@@ -644,15 +615,15 @@ public static class PcapToCsvExporter
         try
         {
             var headerText = Encoding.ASCII.GetString(payload, 0, Math.Min(payload.Length, 2048));
-            var lines = headerText.Split(new[] { "\r\n", "\n" }, StringSplitOptions.RemoveEmptyEntries);
+            var lines = headerText.Split(["\r\n", "\n"], StringSplitOptions.RemoveEmptyEntries);
 
             var headerLine = lines.FirstOrDefault(line =>
                 line.StartsWith(headerName, StringComparison.OrdinalIgnoreCase));
 
             if (headerLine != null)
             {
-                var value = headerLine.Substring(headerName.Length).Trim();
-                return value.Length > 100 ? value.Substring(0, 100) : value;
+                var value = headerLine[headerName.Length..].Trim();
+                return value.Length > 100 ? value[..100] : value;
             }
         }
         catch
@@ -751,7 +722,7 @@ public static class PcapToCsvExporter
             Console.WriteLine($"  • {protocol.Key}: {protocol.Value:N0} packets ({percentage:F1}%)");
         }
 
-        if (dnsQueries.Any())
+        if (!dnsQueries.IsEmpty)
         {
             Console.WriteLine("\n🔍 Top DNS Queries:");
             foreach (var dns in dnsQueries.OrderByDescending(x => x.Value).Take(5))
@@ -760,7 +731,7 @@ public static class PcapToCsvExporter
             }
         }
 
-        if (httpRequests.Any())
+        if (!httpRequests.IsEmpty)
         {
             Console.WriteLine("\n🌐 HTTP Activity:");
             foreach (var http in httpRequests.OrderByDescending(x => x.Value).Take(5))
@@ -781,199 +752,4 @@ public static class PcapToCsvExporter
     }
 
     #endregion
-
-    #region Helper Classes
-
-    public class PacketInfo
-    {
-        public DateTime Timestamp { get; set; }
-        public string SourceIP { get; set; } = string.Empty;
-        public string DestinationIP { get; set; } = string.Empty;
-        public string Protocol { get; set; } = string.Empty;
-        public int PacketLength { get; set; }
-        public int HeaderLength { get; set; }
-        public int PayloadLength { get; set; }
-        public int TTL { get; set; }
-        public bool IsFragmented { get; set; }
-        public int FragmentOffset { get; set; }
-        public int SourcePort { get; set; }
-        public int DestinationPort { get; set; }
-        public TcpFlags TcpFlags { get; set; } = new();
-        public int TcpWindowSize { get; set; }
-        public long TcpSequenceNumber { get; set; }
-        public long TcpAcknowledgmentNumber { get; set; }
-    }
-
-    public class TcpFlags
-    {
-        public bool Syn { get; set; }
-        public bool Ack { get; set; }
-        public bool Fin { get; set; }
-        public bool Rst { get; set; }
-        public bool Psh { get; set; }
-        public bool Urg { get; set; }
-    }
-
-    public class ApplicationLayerInfo
-    {
-        public bool IsDnsQuery { get; set; }
-        public bool IsDnsResponse { get; set; }
-        public int DnsQuestionCount { get; set; }
-        public int DnsAnswerCount { get; set; }
-        public string DnsDomain { get; set; } = string.Empty;
-        public bool IsHttpRequest { get; set; }
-        public bool IsHttpResponse { get; set; }
-        public string HttpMethod { get; set; } = string.Empty;
-        public int HttpStatusCode { get; set; }
-        public string HttpUserAgent { get; set; } = string.Empty;
-        public string HttpHost { get; set; } = string.Empty;
-    }
-
-    public class PayloadFeatures
-    {
-        public double Entropy { get; set; }
-        public int UniqueCharacters { get; set; }
-        public double AsciiRatio { get; set; }
-    }
-
-    public class TimingFeatures
-    {
-        public double InterPacketInterval { get; set; }
-        public bool IsNightTime { get; set; }
-        public bool IsWeekend { get; set; }
-        public int HourOfDay { get; set; }
-        public int DayOfWeek { get; set; }
-    }
-
-    public class AnomalyInfo
-    {
-        public bool IsAnomaly { get; set; }
-        public string Type { get; set; } = string.Empty;
-        public string Severity { get; set; } = string.Empty;
-        public float Confidence { get; set; }
-    }
-
-    #endregion
-
-    /// <summary>
-    /// Network anomaly detection engine
-    /// </summary>
-    public class NetworkAnomalyDetector
-    {
-        private static readonly HashSet<int> SuspiciousPorts = new()
-        {
-            4444, 31337, 666, 1337, 12345, 54321, 2323, 5555, 6666, 7777, 8888, 9999,
-            1234, 6667, 27374, 30303, 32768, 32769, 40421, 40426, 49301, 54320
-        };
-
-        public AnomalyInfo DetectAnomaliesAsync(
-            PacketInfo packetInfo,
-            FlowTracker flowTracker,
-            ApplicationLayerInfo appLayerInfo,
-            PayloadFeatures payloadFeatures,
-            List<IPAddress> localIPs)
-        {
-            return DetectAnomalies(packetInfo, flowTracker, appLayerInfo, payloadFeatures, localIPs);
-        }
-
-        private AnomalyInfo DetectAnomalies(
-            PacketInfo packetInfo,
-            FlowTracker flowTracker,
-            ApplicationLayerInfo appLayerInfo,
-            PayloadFeatures payloadFeatures,
-            List<IPAddress> localIPs)
-        {
-            // Protocol-based anomalies
-            if (packetInfo.Protocol == "Udp" && packetInfo.PacketLength > 1024)
-            {
-                return new AnomalyInfo
-                {
-                    IsAnomaly = true,
-                    Type = "Large UDP Packet",
-                    Severity = "Medium",
-                    Confidence = 0.7f
-                };
-            }
-
-            // TCP anomalies
-            if (packetInfo.TcpFlags.Syn && !packetInfo.TcpFlags.Ack && flowTracker.PacketCount == 1)
-            {
-                return new AnomalyInfo
-                {
-                    IsAnomaly = true,
-                    Type = "TCP SYN Flood",
-                    Severity = "High",
-                    Confidence = 0.8f
-                };
-            }
-
-            // Port scanning detection
-            if (flowTracker.UniqueDestinationPorts.Count > PORT_SCAN_THRESHOLD && flowTracker.Duration < 10)
-            {
-                return new AnomalyInfo
-                {
-                    IsAnomaly = true,
-                    Type = "Port Scanning",
-                    Severity = "High",
-                    Confidence = 0.9f
-                };
-            }
-
-            // High entropy payload (potential encryption/obfuscation)
-            if (payloadFeatures.Entropy > HIGH_ENTROPY_THRESHOLD && packetInfo.PayloadLength > 500)
-            {
-                return new AnomalyInfo
-                {
-                    IsAnomaly = true,
-                    Type = "High Entropy Payload",
-                    Severity = "Medium",
-                    Confidence = 0.6f
-                };
-            }
-
-            // DNS tunneling detection
-            if (appLayerInfo.IsDnsQuery && appLayerInfo.DnsDomain.Length > MAX_DNS_QUERY_LENGTH)
-            {
-                return new AnomalyInfo
-                {
-                    IsAnomaly = true,
-                    Type = "DNS Tunneling",
-                    Severity = "High",
-                    Confidence = 0.8f
-                };
-            }
-
-            // Suspicious port activity
-            if (SuspiciousPorts.Contains(packetInfo.DestinationPort))
-            {
-                return new AnomalyInfo
-                {
-                    IsAnomaly = true,
-                    Type = "Suspicious Port Activity",
-                    Severity = "Medium",
-                    Confidence = 0.7f
-                };
-            }
-
-            // High bandwidth flow
-            if (flowTracker.BytesPerSecond > HIGH_BANDWIDTH_THRESHOLD)
-            {
-                return new AnomalyInfo
-                {
-                    IsAnomaly = true,
-                    Type = "High Bandwidth Flow",
-                    Severity = "Medium",
-                    Confidence = 0.6f
-                };
-            }
-
-            return new AnomalyInfo
-            {
-                IsAnomaly = false,
-                Type = "Normal",
-                Severity = "Low",
-                Confidence = 0.0f
-            };
-        }
-    }
 }

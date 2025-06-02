@@ -5,7 +5,7 @@
 /// </summary>
 public class ShannonEntropy
 {
-    private readonly Dictionary<byte, int> _frequencyCache = new();
+    private readonly Dictionary<byte, int> _frequencyCache = [];
 
     public double Calculate(byte[] data)
     {
