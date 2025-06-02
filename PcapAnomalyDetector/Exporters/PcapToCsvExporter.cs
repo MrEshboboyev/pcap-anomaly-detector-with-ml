@@ -26,13 +26,15 @@ public static partial class PcapToCsvExporter
 
     #region Convert Pcap to CSV
 
+    // Asosiy sinxron (asosiy oqimda bajariladigan) funksiya
     public static void ConvertPcapToCsv(string pcapPath, string csvOutputPath, bool labelAnomalies = true)
     {
-        Console.WriteLine("\n\nConvert pcap to csv: STARTED ...");
+        Console.WriteLine("\n\n📥 PCAP faylni CSV ga aylantirish boshlandi...");
 
+        // Asinxron funksiyani sinxron usulda kutib bajariladi
         ConvertPcapToCsvAsync(pcapPath, csvOutputPath, labelAnomalies).GetAwaiter().GetResult();
 
-        Console.WriteLine("\n\nConvert pcap to csv: FINISHED ...");
+        Console.WriteLine("\n\n✅ PCAP faylni CSV ga aylantirish tugadi.");
     }
 
     public static async Task ConvertPcapToCsvAsync(
@@ -42,39 +44,48 @@ public static partial class PcapToCsvExporter
         int maxPackets = 0,
         IProgress<int>? progressCallback = null)
     {
+        // 1. Fayl mavjudligini tekshiramiz
         if (!File.Exists(pcapPath))
-            throw new FileNotFoundException($"PCAP file not found: {pcapPath}");
+            throw new FileNotFoundException($"❌ PCAP fayl topilmadi: {pcapPath}");
 
-        var flowStats = new ConcurrentDictionary<string, FlowTracker>();
-        var protocolStats = new ConcurrentDictionary<string, int>();
-        var dnsQueries = new ConcurrentDictionary<string, int>();
-        var httpRequests = new ConcurrentDictionary<string, int>();
-        var entropyCalculator = new ShannonEntropy();
-        var anomalyDetector = new NetworkAnomalyDetector();
+        // 2. Statistikalar va hisoblagichlar uchun konteynerlar (thread-safe)
+        var flowStats = new ConcurrentDictionary<string, FlowTracker>();        // Har bir oqim (stream) uchun statistikalar
+        var protocolStats = new ConcurrentDictionary<string, int>();           // Protokol bo‘yicha hisob
+        var dnsQueries = new ConcurrentDictionary<string, int>();              // DNS so‘rovlar statistikasi
+        var httpRequests = new ConcurrentDictionary<string, int>();            // HTTP so‘rovlar statistikasi
+        var entropyCalculator = new ShannonEntropy();                          // Entropiya hisoblovchi ob'ekt
+        var anomalyDetector = new NetworkAnomalyDetector();                    // Anomaliyani aniqlovchi klass
 
+        // 3. Vaqt tamg‘asi bilan vaqtinchalik fayl nomini yaratish
         var timestamp = DateTime.Now.ToString("yyyyMMdd_HHmmss");
         var tempCsvPath = Path.Combine(Path.GetDirectoryName(csvOutputPath) ?? "", $"temp_{timestamp}.csv");
 
         try
         {
+            // 4. PCAP faylni ochamiz
             using var device = new SharpPcap.LibPcap.CaptureFileReaderDevice(pcapPath);
             device.Open();
 
+            // CSV faylga yoziladigan satrlar ro‘yxati. Avval sarlavha (header) qo‘shiladi
             var csvLines = new List<string> { GenerateCsvHeader() };
-            DateTime? previousPacketTime = null;
-            var localIPs = await GetLocalIPAddressesAsync();
+
+            DateTime? previousPacketTime = null; // Oldingi paket vaqti
+            var localIPs = await GetLocalIPAddressesAsync(); // Lokal IP manzillarni aniqlash
             int packetCount = 0;
 
-            Console.WriteLine($"🔄 Starting PCAP conversion: {pcapPath}");
-            Console.WriteLine($"📝 Output file: {csvOutputPath}");
+            Console.WriteLine($"🔄 PCAP konversiyasi boshlandi: {pcapPath}");
+            Console.WriteLine($"📤 Chiqish fayli: {csvOutputPath}");
 
+            // 5. Barcha paketlarni navbat bilan o‘qish
             while (device.GetNextPacket(out PacketCapture capture) == GetPacketStatus.PacketRead)
             {
+                // Maksimal paket soni belgilangan bo‘lsa — to‘xtatish
                 if (maxPackets > 0 && packetCount >= maxPackets)
                     break;
 
                 try
                 {
+                    // 6. Har bir paketni qayta ishlash
                     var packetData = ProcessPacketAsync(
                         capture,
                         flowStats,
@@ -94,15 +105,15 @@ public static partial class PcapToCsvExporter
                         packetCount++;
                     }
 
-                    // Write batch to file periodically
+                    // 7. Har 1000 ta satrdan so‘ng CSV ga yozib, ro‘yxatni tozalash
                     if (csvLines.Count >= BATCH_SIZE)
                     {
                         await WriteBatchAsync(tempCsvPath, csvLines);
                         csvLines.Clear();
-                        csvLines.Add(GenerateCsvHeader()); // Re-add header for continuation
+                        csvLines.Add(GenerateCsvHeader()); // Sarlavha qayta qo‘shiladi
                     }
 
-                    // Report progress
+                    // 8. Har 1000 paketda bir marta progress haqida ma’lumot berish
                     if (packetCount % 1000 == 0)
                     {
                         progressCallback?.Report(packetCount);
@@ -110,27 +121,27 @@ public static partial class PcapToCsvExporter
                 }
                 catch (Exception ex)
                 {
-                    Console.WriteLine($"⚠️ Error processing packet {packetCount}: {ex.Message}");
+                    Console.WriteLine($"⚠️ Paket #{packetCount} ni qayta ishlashda xatolik: {ex.Message}");
                 }
             }
 
-            // Write remaining lines
-            if (csvLines.Count > 1) // More than just header
+            // 9. Oxirgi qoldiq satrlarni faylga yozish
+            if (csvLines.Count > 1)
             {
                 await WriteBatchAsync(tempCsvPath, csvLines);
             }
 
-            // Move temp file to final location
+            // 10. Vaqtinchalik faylni yakuniy faylga ko‘chirish
             if (File.Exists(csvOutputPath))
                 File.Delete(csvOutputPath);
             File.Move(tempCsvPath, csvOutputPath);
 
-            // Generate summary report
+            // 11. Yakuniy hisobotni yaratish (statistik ma’lumotlar bilan)
             GenerateSummaryReport(csvOutputPath, packetCount, protocolStats, dnsQueries, httpRequests, flowStats);
         }
         finally
         {
-            // Cleanup temp file
+            // 12. Vaqtinchalik faylni tozalash (agar hali mavjud bo‘lsa)
             if (File.Exists(tempCsvPath))
             {
                 try { File.Delete(tempCsvPath); } catch { }
@@ -699,55 +710,61 @@ public static partial class PcapToCsvExporter
     #region Reporting
 
     private static void GenerateSummaryReport(
-        string csvPath,
-        int totalPackets,
-        ConcurrentDictionary<string, int> protocolStats,
-        ConcurrentDictionary<string, int> dnsQueries,
-        ConcurrentDictionary<string, int> httpRequests,
-        ConcurrentDictionary<string, FlowTracker> flowStats)
+        string csvPath,                                   // Yakuniy CSV fayl yo‘li
+        int totalPackets,                                 // Umumiy qayta ishlangan paketlar soni
+        ConcurrentDictionary<string, int> protocolStats,  // Protokol bo‘yicha statistika
+        ConcurrentDictionary<string, int> dnsQueries,     // DNS so‘rovlari bo‘yicha statistikasi
+        ConcurrentDictionary<string, int> httpRequests,   // HTTP so‘rovlari bo‘yicha statistikasi
+        ConcurrentDictionary<string, FlowTracker> flowStats) // Har bir alohida tarmoq oqimi (flow) uchun statistika
     {
+        // ========== Bosh sarlavha ==========
         Console.WriteLine("\n" + new string('=', 60));
-        Console.WriteLine("📊 PCAP CONVERSION SUMMARY REPORT");
+        Console.WriteLine("📊 PCAP KONVERSIYASI BO‘YICHA YAKUNIY HISOBOT");
         Console.WriteLine(new string('=', 60));
 
-        Console.WriteLine($"✅ Conversion completed successfully!");
-        Console.WriteLine($"📁 Output file: {csvPath}");
-        Console.WriteLine($"📦 Total packets processed: {totalPackets:N0}");
-        Console.WriteLine($"🌊 Total flows tracked: {flowStats.Count:N0}");
+        // 📁 Umumiy ma'lumotlar
+        Console.WriteLine("✅ Konversiya muvaffaqiyatli yakunlandi!");
+        Console.WriteLine($"📁 Yaratilgan CSV fayl: {csvPath}");
+        Console.WriteLine($"📦 Qayta ishlangan paketlar soni: {totalPackets:N0} ta");
+        Console.WriteLine($"🌊 Aniqlangan oqimlar (flows): {flowStats.Count:N0} ta");
 
-        Console.WriteLine("\n🔗 Protocol Distribution:");
+        // 🔗 Protokollar taqsimoti
+        Console.WriteLine("\n🔗 Protokollar bo‘yicha taqsimot:");
         foreach (var protocol in protocolStats.OrderByDescending(x => x.Value).Take(10))
         {
             var percentage = (protocol.Value * 100.0) / totalPackets;
-            Console.WriteLine($"  • {protocol.Key}: {protocol.Value:N0} packets ({percentage:F1}%)");
+            Console.WriteLine($"  • {protocol.Key}: {protocol.Value:N0} ta paket ({percentage:F1}%)");
         }
 
+        // 🔍 Eng ko‘p DNS so‘rovlari
         if (!dnsQueries.IsEmpty)
         {
-            Console.WriteLine("\n🔍 Top DNS Queries:");
+            Console.WriteLine("\n🔍 Eng ko‘p DNS so‘rovlari:");
             foreach (var dns in dnsQueries.OrderByDescending(x => x.Value).Take(5))
             {
-                Console.WriteLine($"  • {dns.Key}: {dns.Value:N0} queries");
+                Console.WriteLine($"  • {dns.Key}: {dns.Value:N0} ta so‘rov");
             }
         }
 
+        // 🌐 Eng faol HTTP so‘rovlari
         if (!httpRequests.IsEmpty)
         {
-            Console.WriteLine("\n🌐 HTTP Activity:");
+            Console.WriteLine("\n🌐 HTTP faolligi:");
             foreach (var http in httpRequests.OrderByDescending(x => x.Value).Take(5))
             {
-                Console.WriteLine($"  • {http.Key}: {http.Value:N0} requests");
+                Console.WriteLine($"  • {http.Key}: {http.Value:N0} ta so‘rov");
             }
         }
 
-        // Flow analysis
+        // 📈 Eng katta oqimlar (flows) hajmi bo‘yicha
         var topFlows = flowStats.Values.OrderByDescending(f => f.TotalBytes).Take(5);
-        Console.WriteLine("\n📈 Top Flows by Volume:");
+        Console.WriteLine("\n📈 Eng katta oqimlar (ma'lumot hajmi bo‘yicha):");
         foreach (var flow in topFlows)
         {
-            Console.WriteLine($"  • {flow.TotalBytes:N0} bytes, {flow.PacketCount:N0} packets, {flow.Duration:F1}s duration");
+            Console.WriteLine($"  • {flow.TotalBytes:N0} bayt, {flow.PacketCount:N0} ta paket, davomiyligi: {flow.Duration:F1} sekund");
         }
 
+        // Yaqinlashtiruvchi chiziq
         Console.WriteLine(new string('=', 60));
     }
 

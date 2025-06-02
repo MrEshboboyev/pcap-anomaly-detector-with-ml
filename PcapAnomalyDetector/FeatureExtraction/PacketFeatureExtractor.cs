@@ -22,20 +22,26 @@ public class EnhancedPacketFeatureExtractor
 
     public List<EnhancedNetworkPacketData> ExtractFromPcap(string filePath, IProgress<int>? progress = null)
     {
+        // Natijalar uchun ro‘yxat
         var results = new List<EnhancedNetworkPacketData>();
+
+        // Umumiy va qayta ishlangan paketlar soni
         var totalPackets = 0;
         var processedPackets = 0;
 
-        // First pass: count total packets for progress reporting
+        // 🔁 1. Boshlanishida paketlar sonini hisoblash (progress ko‘rsatish uchun)
         if (progress != null)
         {
             using var countDevice = new SharpPcap.LibPcap.CaptureFileReaderDevice(filePath);
             countDevice.Open();
+
             while (countDevice.GetNextPacket(out _) == GetPacketStatus.PacketRead)
-                totalPackets++;
+                totalPackets++; // Har bir paketni sanaymiz
+
             countDevice.Close();
         }
 
+        // 📥 2. Paketlarni o‘qish va xususiyatlarini ajratish
         using var device = new SharpPcap.LibPcap.CaptureFileReaderDevice(filePath);
         device.Open();
 
@@ -43,22 +49,28 @@ public class EnhancedPacketFeatureExtractor
         {
             try
             {
+                // Har bir paketdan xususiyatlarni ajratib olamiz
                 var packetData = ExtractFeatures(capture);
+
+                // Null bo‘lmasa, ro‘yxatga qo‘shamiz
                 if (packetData != null)
                 {
                     results.Add(packetData);
                 }
 
+                // 🔄 Progress yangilanishi
                 processedPackets++;
-                progress?.Report((int)((double)processedPackets / totalPackets * 100));
+                progress?.Report((int)((double)processedPackets / totalPackets * 100)); // % hisobida
             }
             catch (Exception ex)
             {
-                Console.WriteLine($"Error processing packet {processedPackets}: {ex.Message}");
+                Console.WriteLine($"❌ Paketni qayta ishlashda xatolik #{processedPackets}: {ex.Message}");
             }
         }
 
         device.Close();
+
+        // ✅ Tayyor bo‘lgan xususiyatlar ro‘yxatini qaytaramiz
         return results;
     }
 
