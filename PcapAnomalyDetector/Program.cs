@@ -1,11 +1,12 @@
-﻿using PcapAnomalyDetector;
+﻿using Microsoft.ML;
+using PcapAnomalyDetector;
 using PcapAnomalyDetector.Exporters;
 using PcapAnomalyDetector.FeatureExtraction;
-using PcapAnomalyDetector.MachineLearning;
+using PcapAnomalyDetector.Models;
 
 Console.WriteLine("Extracting packet features from PCAP...");
 var extractor = new EnhancedPacketFeatureExtractor();
-var packets = extractor.ExtractFromPcap("experiment.pcapng");
+var packets = extractor.ExtractFromPcap("C://Temp//testable.pcapng");
 
 Console.WriteLine("\nTraditional Detection:");
 foreach (var packet in packets)
@@ -17,28 +18,27 @@ foreach (var packet in packets)
 }
 
 Console.WriteLine("\nPreparing for ML detection...");
-await Task.Delay(1000); // Slight delay for clarity
 
 var csvPath = "network_traffic.csv";
-var modelPath = "model.zip";
-var pcapInput = "C://MrEshboboyev//PcapAnomalyDetector//test.pcapng";
+var pcapInput = "C://Temp//dataset.pcapng";
 
 Console.WriteLine("\nExporting PCAP to CSV...");
 PcapToCsvExporter.ConvertPcapToCsv(pcapInput, csvPath);
 
-Console.WriteLine("\nTraining ML models...");
-var trainer = new AdvancedAnomalyDetector();
-await trainer.TrainMultipleModels(csvPath, modelPath);
+Console.WriteLine("\n🧠 Training ML model...");
+var modelBuilder = new MLModelBuilder(csvPath);
+var trainedModel = modelBuilder.TrainAndEvaluateAll();
+Console.WriteLine("✅ Model trained successfully!");
 
-Console.WriteLine("\nLoading trained model...");
-var mlDetector = new MlAnomalyDetector(modelPath);
+var mlContext = new MLContext();
+var predictionEngine = mlContext.Model.CreatePredictionEngine<EnhancedNetworkPacketData, PacketPrediction>(trainedModel);
 
-Console.WriteLine("\nML Detection:");
+Console.WriteLine("\n🤖 ML Detection:");
+int count = 0;
 foreach (var packet in packets)
 {
-    var prediction = mlDetector.Predict(packet);
-    if (prediction.PredictedLabel)
-    {
-        Console.WriteLine($"[ANOMALY] {packet.SourceIP} -> {packet.DestinationIP} | Score: {prediction.Score:F4}");
-    }
+    var prediction = predictionEngine.Predict(packet);
+    Console.WriteLine($"Packet #{++count}: {(prediction.Prediction ? "[ANOMALY]" : "Normal")} | Score: {prediction.Score:F4} | Probability: {prediction.Probability:P2}");
 }
+
+Console.WriteLine("\n✅ Detection complete.");

@@ -12,7 +12,7 @@ public class EnhancedPacketFeatureExtractor
 {
     private readonly ConcurrentDictionary<string, FlowData> _flowTracker = new();
     private readonly HashSet<int> _wellKnownPorts;
-    private readonly Dictionary<string, int> _portScanTracker = new();
+    private readonly Dictionary<string, int> _portScanTracker = [];
     private DateTime _lastPacketTime = DateTime.MinValue;
 
     public EnhancedPacketFeatureExtractor()
