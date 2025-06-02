@@ -245,7 +245,7 @@ public class EnhancedPacketFeatureExtractor
 
     #endregion
 
-    #region Flow related Methods
+    #region Flow related
 
     private class FlowData
     {
@@ -296,14 +296,15 @@ public class EnhancedPacketFeatureExtractor
     private bool DetectPortScan(string sourceIp, int destinationPort)
     {
         var key = sourceIp;
-        if (!_portScanTracker.ContainsKey(key))
+        if (!_portScanTracker.TryGetValue(key, out int value))
         {
-            _portScanTracker[key] = 1;
+            value = 1;
+            _portScanTracker[key] = value;
             return false;
         }
 
-        _portScanTracker[key]++;
-        return _portScanTracker[key] > 10; // Threshold for port scan detection
+        _portScanTracker[key] = ++value;
+        return value > 10; // Threshold for port scan detection
     }
 
     #endregion
@@ -387,11 +388,11 @@ public class EnhancedPacketFeatureExtractor
 
     private HashSet<int> InitializeWellKnownPorts()
     {
-        return new HashSet<int>
-        {
+        return
+        [
             20, 21, 22, 23, 25, 53, 67, 68, 69, 80, 110, 119, 123, 135, 137, 138, 139,
             143, 161, 162, 389, 443, 445, 514, 636, 993, 995, 1433, 1521, 3306, 3389, 5432
-        };
+        ];
     }
 
     #endregion

@@ -6,7 +6,7 @@ namespace PcapAnomalyDetector.Models;
 /// <summary>
 /// ML.NET prediction result for anomaly detection
 /// </summary>
-public class AnomalyPrediction
+public class PacketPrediction
 {
     [ColumnName("PredictedLabel")]
     public bool PredictedLabel { get; set; }

@@ -38,7 +38,7 @@ int count = 0;
 foreach (var packet in packets)
 {
     var prediction = predictionEngine.Predict(packet);
-    Console.WriteLine($"Packet #{++count}: {(prediction.Prediction ? "[ANOMALY]" : "Normal")} | Score: {prediction.Score:F4} | Probability: {prediction.Probability:P2}");
+    Console.WriteLine($"Packet #{++count}: {(prediction.PredictedLabel ? "[ANOMALY]" : "Normal")} | Score: {prediction.Score:F4} | Probability: {prediction.Probability:P2}");
 }
 
 Console.WriteLine("\n✅ Detection complete.");
